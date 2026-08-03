@@ -1,3 +1,6 @@
-//
-// Created by Lenovo on 8/3/2026.
-//
+#include <iostream>
+
+int main()
+{
+    printf("hello world\n");
+}
