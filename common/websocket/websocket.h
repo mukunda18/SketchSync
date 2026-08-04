@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include "result.h"
 
 namespace beast = boost::beast;
 namespace websocket_beast = beast::websocket;
@@ -18,27 +19,6 @@ struct webaddr
     std::string host;
     std::string port;
     std::string path;
-};
-
-enum class ws_error
-{
-    none = 0,
-    resolve_failed,
-    connect_failed,
-    handshake_failed,
-    send_failed,
-    receive_failed,
-    closed,
-};
-
-template <typename T>
-struct result
-{
-    T value{};
-    ws_error error = ws_error::none;
-    std::string message;
-
-    explicit operator bool() const { return error == ws_error::none; }
 };
 
 struct websocket
