@@ -10,14 +10,16 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 add_executable(engine
         engine/engine.cpp
-        common/websocket.h
-        common/websocket.cpp
+        common/websocket/websocket.h
+        common/websocket/websocket.cpp
+        common/websocket/result.h
 )
 
 add_executable(server
         server/server.cpp
-        common/websocket.h
-        common/websocket.cpp
+        common/websocket/websocket.h
+        common/websocket/websocket.cpp
+        common/websocket/result.h
 )
 
 
