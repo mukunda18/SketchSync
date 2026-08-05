@@ -13,6 +13,9 @@ add_executable(engine
         common/websocket/websocket.h
         common/websocket/websocket.cpp
         common/websocket/result.h
+        common/tcp/tcp_socket.h
+        common/tcp/tcp_socket.cpp
+        common/tcp/result.h
 )
 
 add_executable(server
@@ -20,6 +23,9 @@ add_executable(server
         common/websocket/websocket.h
         common/websocket/websocket.cpp
         common/websocket/result.h
+        common/tcp/tcp_socket.h
+        common/tcp/tcp_socket.cpp
+        common/tcp/result.h
 )
 
 
