@@ -3,18 +3,12 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <cstdint>
-#include <span>
 #include <string>
-#include <vector>
-#include "result.h"
+#include "../results.h"
+#include "../protocol/message.h"
 
-// Wire frame: [uint32_t body_len (big-endian)][uint8_t opcode][payload...]
-struct tcp_message
-{
-    uint8_t opcode;
-    std::vector<uint8_t> payload;
-};
+namespace net = boost::asio;
+using tcp = net::ip::tcp;
 
 struct tcp_addr
 {
@@ -37,8 +31,8 @@ struct tcp_socket
     result<bool> connect();
     result<bool> connect(tcp_addr address);
 
-    result<size_t> send(uint8_t opcode, std::span<const uint8_t> payload);
-    result<tcp_message> receive();
+    result<size_t> send(std::span<const uint8_t> data);
+    result<std::vector<uint8_t>> receive(size_t length);
 
     void close();
 
@@ -46,8 +40,8 @@ struct tcp_socket
 
 private:
     tcp_addr address_;
-    boost::asio::ip::tcp::resolver resolver_;
-    boost::asio::ip::tcp::socket socket_;
+    tcp::resolver resolver_;
+    net::ip::tcp::socket socket_;
     bool connected_ = false;
 };
 

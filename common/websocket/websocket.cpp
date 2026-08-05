@@ -29,51 +29,51 @@ result<bool> websocket::connect()
 
     const auto results = resolver_.resolve(address_.host, address_.port, ec);
     if (ec)
-        return {.value = false, .error = ws_error::resolve_failed, .message = ec.message()};
+        return {.value = false, .error = error::resolve_failed, .message = ec.message()};
 
     net::connect(ws_.next_layer(), results, ec);
     if (ec)
-        return {.value = false, .error = ws_error::connect_failed, .message = ec.message()};
+        return {.value = false, .error = error::connect_failed, .message = ec.message()};
 
     ws_.handshake(address_.host, address_.path, ec);
     if (ec)
-        return {.value = false, .error = ws_error::handshake_failed, .message = ec.message()};
+        return {.value = false, .error = error::handshake_failed, .message = ec.message()};
 
     ws_.binary(true);
     connected_ = true;
-    return {.value = true, .error = ws_error::none, .message = {}};
+    return {.value = true, .error = error::none, .message = {}};
 }
 
 result<size_t> websocket::send(const std::span<const uint8_t> data)
 {
     if (!connected_)
-        return {.value = 0, .error = ws_error::closed, .message = "socket not connected"};
+        return {.value = 0, .error = error::closed, .message = "socket not connected"};
 
     beast::error_code ec;
     const auto written = ws_.write(net::buffer(data.data(), data.size()), ec);
 
     if (ec)
-        return {.value = 0, .error = ws_error::send_failed, .message = ec.message()};
+        return {.value = 0, .error = error::send_failed, .message = ec.message()};
 
-    return {.value = written, .error = ws_error::none, .message = {}};
+    return {.value = written, .error = error::none, .message = {}};
 }
 
 result<std::vector<uint8_t>> websocket::receive()
 {
     if (!connected_)
-        return {.value = {}, .error = ws_error::closed, .message = "socket not connected"};
+        return {.value = {}, .error = error::closed, .message = "socket not connected"};
 
     beast::error_code ec;
     beast::flat_buffer buffer;
 
     ws_.read(buffer, ec);
     if (ec)
-        return {.value = {}, .error = ws_error::receive_failed, .message = ec.message()};
+        return {.value = {}, .error = error::receive_failed, .message = ec.message()};
 
     const auto bytes = buffer.cdata();
     const auto* begin = static_cast<const uint8_t*>(bytes.data());
 
-    return {.value = {begin, begin + bytes.size()}, .error = ws_error::none, .message = {}};
+    return {.value = {begin, begin + bytes.size()}, .error = error::none, .message = {}};
 }
 
 void websocket::close()

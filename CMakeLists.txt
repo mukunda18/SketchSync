@@ -12,20 +12,26 @@ add_executable(engine
         engine/engine.cpp
         common/websocket/websocket.h
         common/websocket/websocket.cpp
-        common/websocket/result.h
         common/tcp/tcp_socket.h
         common/tcp/tcp_socket.cpp
-        common/tcp/result.h
+        common/protocol/message.h
+        common/protocol/message.cpp
+        common/results.h
+        common/session/member.h
+        common/session/session.h
 )
 
 add_executable(server
-        server/server.cpp
+        engine/engine.cpp
         common/websocket/websocket.h
         common/websocket/websocket.cpp
-        common/websocket/result.h
         common/tcp/tcp_socket.h
         common/tcp/tcp_socket.cpp
-        common/tcp/result.h
+        common/protocol/message.h
+        common/protocol/message.cpp
+        common/results.h
+        common/session/member.h
+        common/session/session.h
 )
 
 

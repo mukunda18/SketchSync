@@ -7,7 +7,8 @@
 #include <span>
 #include <string>
 #include <vector>
-#include "result.h"
+
+#include "../results.h"
 
 namespace beast = boost::beast;
 namespace websocket_beast = beast::websocket;
