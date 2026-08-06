@@ -19,6 +19,10 @@ add_executable(engine
         common/results.h
         common/session/member.h
         common/session/session.h
+        common/tcp/tcp_server.h
+        common/tcp/tcp_server.cpp
+        common/websocket/websocket_server.h
+        common/websocket/websocket_server.cpp
 )
 
 add_executable(server

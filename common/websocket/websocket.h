@@ -40,7 +40,7 @@ struct websocket
     result<size_t> send(std::span<const uint8_t> data);
     result<std::vector<uint8_t>> receive();
 
-    void close();
+    result<bool> close();
 
     [[nodiscard]] bool is_open() const noexcept;
 

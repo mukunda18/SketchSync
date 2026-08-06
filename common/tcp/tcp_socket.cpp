@@ -113,14 +113,24 @@ result<std::vector<uint8_t>> tcp_socket::receive(const size_t length)
     };
 }
 
-void tcp_socket::close()
+result<bool> tcp_socket::close()
 {
-    if (!connected_) return;
+    if (!connected_)
+        return {.value = true, .error = error::none, .message = {}};
 
     boost::system::error_code ec;
-    socket_.shutdown(tcp::socket::shutdown_both, ec);
-    socket_.close(ec);
+
+    ec = socket_.shutdown(tcp::socket::shutdown_both, ec);
+    if (ec)
+        return {.value = false, .error = error::shutdown_failed, .message = ec.message()};
+
+    ec = socket_.close(ec);
     connected_ = false;
+
+    if (ec)
+        return {.value = false, .error = error::close_failed, .message = ec.message()};
+
+    return {.value = true, .error = error::none, .message = {}};
 }
 
 bool tcp_socket::is_open() const noexcept

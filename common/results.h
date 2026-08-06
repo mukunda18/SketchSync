@@ -13,6 +13,9 @@ enum class error
     closed,
     malformed,
     handshake_failed,
+    accept_failed,
+    close_failed,
+    shutdown_failed,
 };
 
 template <typename T>

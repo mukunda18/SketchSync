@@ -34,7 +34,7 @@ struct tcp_socket
     result<size_t> send(std::span<const uint8_t> data);
     result<std::vector<uint8_t>> receive(size_t length);
 
-    void close();
+    result<bool> close();
 
     [[nodiscard]] bool is_open() const noexcept;
 

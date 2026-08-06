@@ -76,13 +76,19 @@ result<std::vector<uint8_t>> websocket::receive()
     return {.value = {begin, begin + bytes.size()}, .error = error::none, .message = {}};
 }
 
-void websocket::close()
+result<bool> websocket::close()
 {
-    if (!connected_) return;
+    if (!connected_)
+        return {.value = true, .error = error::none, .message = {}};
 
     beast::error_code ec;
     ws_.close(websocket_beast::close_code::normal, ec);
     connected_ = false;
+
+    if (ec)
+        return {.value = false, .error = error::close_failed, .message = ec.message()};
+
+    return {.value = true, .error = error::none, .message = {}};
 }
 
 bool websocket::is_open() const noexcept
