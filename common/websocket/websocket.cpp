@@ -1,97 +1,104 @@
-#include "websocket.h"
+#include "webSocket.h"
 
-websocket::websocket(net::io_context& context)
+webSocket::webSocket(net::io_context& context)
     : resolver_(context), ws_(context)
 {
     ws_.binary(true);
 }
 
-websocket::websocket(webaddr address, net::io_context& context)
+webSocket::webSocket(webaddr address, net::io_context& context)
     : address_(std::move(address)), resolver_(context), ws_(context)
 {
     ws_.binary(true);
 }
 
-websocket::~websocket()
+webSocket::webSocket(websocket_beast::stream<tcp::socket> ws, net::io_context& context)
+    : resolver_(context), ws_(std::move(ws))
+{
+    ws_.binary(true);
+    connected_ = ws_.is_open();
+}
+
+webSocket::~webSocket()
 {
     if (connected_) close();
 }
 
-result<bool> websocket::connect(webaddr address)
+result<bool> webSocket::connect(webaddr address)
 {
     address_ = std::move(address);
     return connect();
 }
 
-result<bool> websocket::connect()
+result<bool> webSocket::connect()
 {
     beast::error_code ec;
 
     const auto results = resolver_.resolve(address_.host, address_.port, ec);
     if (ec)
-        return {.value = false, .error = error::resolve_failed, .message = ec.message()};
+        return {.value = false, .err = error::resolve_failed, .message = ec.message()};
 
     net::connect(ws_.next_layer(), results, ec);
     if (ec)
-        return {.value = false, .error = error::connect_failed, .message = ec.message()};
+        return {.value = false, .err = error::connect_failed, .message = ec.message()};
 
     ws_.handshake(address_.host, address_.path, ec);
     if (ec)
-        return {.value = false, .error = error::handshake_failed, .message = ec.message()};
+        return {.value = false, .err = error::handshake_failed, .message = ec.message()};
 
     ws_.binary(true);
     connected_ = true;
-    return {.value = true, .error = error::none, .message = {}};
+    return {.value = true, .err = error::none, .message = {}};
 }
 
-result<size_t> websocket::send(const std::span<const uint8_t> data)
+result<size_t> webSocket::send(const std::span<const uint8_t> data)
 {
     if (!connected_)
-        return {.value = 0, .error = error::closed, .message = "socket not connected"};
+        return {.value = 0, .err = error::closed, .message = "socket not connected"};
 
     beast::error_code ec;
     const auto written = ws_.write(net::buffer(data.data(), data.size()), ec);
 
     if (ec)
-        return {.value = 0, .error = error::send_failed, .message = ec.message()};
+        return {.value = 0, .err = error::send_failed, .message = ec.message()};
 
-    return {.value = written, .error = error::none, .message = {}};
+    return {.value = written, .err = error::none, .message = {}};
 }
 
-result<std::vector<uint8_t>> websocket::receive()
+result<std::vector<uint8_t>> webSocket::receive()
 {
     if (!connected_)
-        return {.value = {}, .error = error::closed, .message = "socket not connected"};
+        return {.value = {}, .err = error::closed, .message = "socket not connected"};
 
     beast::error_code ec;
     beast::flat_buffer buffer;
 
     ws_.read(buffer, ec);
     if (ec)
-        return {.value = {}, .error = error::receive_failed, .message = ec.message()};
+        return {.value = {}, .err = error::receive_failed, .message = ec.message()};
 
     const auto bytes = buffer.cdata();
     const auto* begin = static_cast<const uint8_t*>(bytes.data());
 
-    return {.value = {begin, begin + bytes.size()}, .error = error::none, .message = {}};
+    return {.value = {begin, begin + bytes.size()}, .err = error::none, .message = {}};
 }
 
-result<bool> websocket::close()
+result<bool> webSocket::close()
 {
     if (!connected_)
-        return {.value = true, .error = error::none, .message = {}};
+        return {.value = true, .err = error::none, .message = {}};
 
     beast::error_code ec;
     ws_.close(websocket_beast::close_code::normal, ec);
     connected_ = false;
 
     if (ec)
-        return {.value = false, .error = error::close_failed, .message = ec.message()};
+        return {.value = false, .err = error::close_failed, .message = ec.message()};
 
-    return {.value = true, .error = error::none, .message = {}};
+    return {.value = true, .err = error::none, .message = {}};
 }
 
-bool websocket::is_open() const noexcept
+bool webSocket::is_open() const noexcept
 {
     return connected_ && ws_.is_open();
 }

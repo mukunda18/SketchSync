@@ -4,8 +4,8 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <string>
-#include "../results.h"
-#include "../protocol/message.h"
+#include "common/results.h"
+#include "common/protocol/message.h"
 
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
@@ -16,17 +16,18 @@ struct tcp_addr
     std::string port;
 };
 
-struct tcp_socket
+struct tcpSocket
 {
-    explicit tcp_socket(boost::asio::io_context& context);
-    explicit tcp_socket(tcp_addr address, boost::asio::io_context& context);
+    explicit tcpSocket(boost::asio::io_context& context);
+    explicit tcpSocket(tcp_addr address, boost::asio::io_context& context);
+    explicit tcpSocket(tcp::socket socket, net::io_context& context);
 
-    tcp_socket(const tcp_socket&) = delete;
-    tcp_socket& operator=(const tcp_socket&) = delete;
-    tcp_socket(tcp_socket&&) = delete;
-    tcp_socket& operator=(tcp_socket&&) = delete;
+    tcpSocket(const tcpSocket&) = delete;
+    tcpSocket& operator=(const tcpSocket&) = delete;
+    tcpSocket(tcpSocket&&) = delete;
+    tcpSocket& operator=(tcpSocket&&) = delete;
 
-    ~tcp_socket();
+    ~tcpSocket();
 
     result<bool> connect();
     result<bool> connect(tcp_addr address);

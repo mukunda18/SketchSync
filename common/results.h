@@ -22,10 +22,10 @@ template <typename T>
 struct result
 {
     T value;
-    error error = error::none;
+    error err = error::none;
     std::string message;
 
-    explicit operator bool() const { return error == error::none; }
+    explicit operator bool() const { return err == error::none; }
 };
 
 #endif

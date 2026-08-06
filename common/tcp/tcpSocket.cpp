@@ -1,4 +1,4 @@
-#include "tcp_socket.h"
+#include "tcpSocket.h"
 #include <boost/asio/connect.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
@@ -6,48 +6,54 @@
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-tcp_socket::tcp_socket(net::io_context& context)
+tcpSocket::tcpSocket(net::io_context& context)
     : resolver_(context), socket_(context)
 {}
 
-tcp_socket::tcp_socket(tcp_addr address, net::io_context& context)
+tcpSocket::tcpSocket(tcp_addr address, net::io_context& context)
     : address_(std::move(address)), resolver_(context), socket_(context)
 {}
 
-tcp_socket::~tcp_socket()
+tcpSocket::tcpSocket(tcp::socket socket, net::io_context& context)
+    : resolver_(context), socket_(std::move(socket))
+{
+    connected_ = socket_.is_open();
+}
+
+tcpSocket::~tcpSocket()
 {
     if (connected_) close();
 }
 
-result<bool> tcp_socket::connect(tcp_addr address)
+result<bool> tcpSocket::connect(tcp_addr address)
 {
     address_ = std::move(address);
     return connect();
 }
 
-result<bool> tcp_socket::connect()
+result<bool> tcpSocket::connect()
 {
     boost::system::error_code ec;
 
     const auto results = resolver_.resolve(address_.host, address_.port, ec);
     if (ec)
-        return {.value = false, .error = error::resolve_failed, .message = ec.message()};
+        return {.value = false, .err = error::resolve_failed, .message = ec.message()};
 
     net::connect(socket_, results, ec);
     if (ec)
-        return {.value = false, .error = error::connect_failed, .message = ec.message()};
+        return {.value = false, .err = error::connect_failed, .message = ec.message()};
 
     connected_ = true;
-    return {.value = true, .error = error::none, .message = {}};
+    return {.value = true, .err = error::none, .message = {}};
 }
 
-result<size_t> tcp_socket::send(const std::span<const uint8_t> data)
+result<size_t> tcpSocket::send(const std::span<const uint8_t> data)
 {
     if (!connected_)
     {
         return {
             .value = 0,
-            .error = error::closed,
+            .err = error::closed,
             .message = "socket not connected"
         };
     }
@@ -64,25 +70,25 @@ result<size_t> tcp_socket::send(const std::span<const uint8_t> data)
     {
         return {
             .value = 0,
-            .error = error::send_failed,
+            .err = error::send_failed,
             .message = ec.message()
         };
     }
 
     return {
         .value = written,
-        .error = error::none,
+        .err = error::none,
         .message = {}
     };
 }
 
-result<std::vector<uint8_t>> tcp_socket::receive(const size_t length)
+result<std::vector<uint8_t>> tcpSocket::receive(const size_t length)
 {
     if (!connected_)
     {
         return {
             .value = {},
-            .error = error::closed,
+            .err = error::closed,
             .message = "socket not connected"
         };
     }
@@ -101,39 +107,39 @@ result<std::vector<uint8_t>> tcp_socket::receive(const size_t length)
     {
         return {
             .value = {},
-            .error = error::receive_failed,
+            .err = error::receive_failed,
             .message = ec.message()
         };
     }
 
     return {
         .value = std::move(buffer),
-        .error = error::none,
+        .err = error::none,
         .message = {}
     };
 }
 
-result<bool> tcp_socket::close()
+result<bool> tcpSocket::close()
 {
     if (!connected_)
-        return {.value = true, .error = error::none, .message = {}};
+        return {.value = true, .err = error::none, .message = {}};
 
     boost::system::error_code ec;
 
     ec = socket_.shutdown(tcp::socket::shutdown_both, ec);
     if (ec)
-        return {.value = false, .error = error::shutdown_failed, .message = ec.message()};
+        return {.value = false, .err = error::shutdown_failed, .message = ec.message()};
 
     ec = socket_.close(ec);
     connected_ = false;
 
     if (ec)
-        return {.value = false, .error = error::close_failed, .message = ec.message()};
+        return {.value = false, .err = error::close_failed, .message = ec.message()};
 
-    return {.value = true, .error = error::none, .message = {}};
+    return {.value = true, .err = error::none, .message = {}};
 }
 
-bool tcp_socket::is_open() const noexcept
+bool tcpSocket::is_open() const noexcept
 {
     return connected_ && socket_.is_open();
 }
