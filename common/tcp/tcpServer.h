@@ -3,21 +3,21 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include "../results.h"
+#include "common/results.h"
 
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-struct tcp_server
+struct tcpServer
 {
-    tcp_server(net::io_context& context, unsigned short port);
+    tcpServer(net::io_context& context, unsigned short port);
 
-    tcp_server(const tcp_server&) = delete;
-    tcp_server& operator=(const tcp_server&) = delete;
-    tcp_server(tcp_server&&) = delete;
-    tcp_server& operator=(tcp_server&&) = delete;
+    tcpServer(const tcpServer&) = delete;
+    tcpServer& operator=(const tcpServer&) = delete;
+    tcpServer(tcpServer&&) = delete;
+    tcpServer& operator=(tcpServer&&) = delete;
 
-    ~tcp_server();
+    ~tcpServer();
 
     // Blocking accept: waits for and returns one connected peer socket
     result<tcp::socket> accept();

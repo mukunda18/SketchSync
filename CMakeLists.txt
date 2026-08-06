@@ -7,35 +7,43 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
+include_directories(${CMAKE_SOURCE_DIR})
 
 add_executable(engine
         engine/engine.cpp
-        common/websocket/websocket.h
-        common/websocket/websocket.cpp
-        common/tcp/tcp_socket.h
-        common/tcp/tcp_socket.cpp
+        common/webSocket/webSocket.h
+        common/webSocket/webSocket.cpp
+        common/tcp/tcpSocket.h
+        common/tcp/tcpSocket.cpp
         common/protocol/message.h
         common/protocol/message.cpp
         common/results.h
-        common/session/member.h
-        common/session/session.h
-        common/tcp/tcp_server.h
-        common/tcp/tcp_server.cpp
-        common/websocket/websocket_server.h
-        common/websocket/websocket_server.cpp
+        server/session/member.h
+        server/session/session.h
+        common/tcp/tcpServer.h
+        common/tcp/tcpServer.cpp
+        common/webSocket/webSocketServer.h
+        common/webSocket/webSocketServer.cpp
+        server/session/clientConnection.h
 )
 
 add_executable(server
-        engine/engine.cpp
-        common/websocket/websocket.h
-        common/websocket/websocket.cpp
-        common/tcp/tcp_socket.h
-        common/tcp/tcp_socket.cpp
+        server/main.cpp
+        common/webSocket/webSocket.h
+        common/webSocket/webSocket.cpp
+        common/tcp/tcpSocket.h
+        common/tcp/tcpSocket.cpp
         common/protocol/message.h
         common/protocol/message.cpp
         common/results.h
-        common/session/member.h
-        common/session/session.h
+        server/session/member.h
+        server/session/session.h
+        common/tcp/tcpServer.h
+        common/tcp/tcpServer.cpp
+        common/webSocket/webSocketServer.h
+        common/webSocket/webSocketServer.cpp
+        server/session/clientConnection.h
+        server/server.cpp
 )
 
 
