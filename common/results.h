@@ -1,9 +1,9 @@
-#ifndef TCP_RESULT_H
-#define TCP_RESULT_H
+#ifndef RESULT_H
+#define RESULT_H
 
 #include <string>
 
-enum class tcp_error
+enum class error
 {
     none = 0,
     resolve_failed,
@@ -12,16 +12,20 @@ enum class tcp_error
     receive_failed,
     closed,
     malformed,
+    handshake_failed,
+    accept_failed,
+    close_failed,
+    shutdown_failed,
 };
 
 template <typename T>
 struct result
 {
     T value;
-    tcp_error error = tcp_error::none;
+    error error = error::none;
     std::string message;
 
-    explicit operator bool() const { return error == tcp_error::none; }
+    explicit operator bool() const { return error == error::none; }
 };
 
 #endif
