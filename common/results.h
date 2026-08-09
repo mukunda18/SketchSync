@@ -16,6 +16,7 @@ enum class error
     accept_failed,
     close_failed,
     shutdown_failed,
+    rejected,
 };
 
 template <typename T>
