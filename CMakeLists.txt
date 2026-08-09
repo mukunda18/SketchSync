@@ -11,6 +11,8 @@ include_directories(${CMAKE_SOURCE_DIR})
 
 add_executable(engine
         engine/engine.cpp
+        engine/client/sessionClient.h
+        engine/client/sessionClient.cpp
         common/webSocket/webSocket.h
         common/webSocket/webSocket.cpp
         common/tcp/tcpSocket.h

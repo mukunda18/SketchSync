@@ -16,6 +16,8 @@ namespace Opcode
     constexpr uint8_t MEMBER_JOINED = 0x05;
     constexpr uint8_t MEMBER_LEFT = 0x06;
     constexpr uint8_t SESSION_CLOSED = 0x07;
+    constexpr uint8_t CREATE_ACK = 0x08;
+    constexpr uint8_t JOIN_ACK = 0x09;
 }
 
 struct Header
@@ -43,6 +45,7 @@ struct CreateMessage
     std::string name;
 };
 result<std::string> parseCreateMessage(std::span<const uint8_t> data);
+std::vector<uint8_t> serializeCreateMessage(const CreateMessage& msg);
 
 
 struct JoinMessage
@@ -51,6 +54,24 @@ struct JoinMessage
     std::string name;
 };
 result<JoinMessage> parseJoinMessage(std::span<const uint8_t> data);
+std::vector<uint8_t> serializeJoinMessage(const JoinMessage& msg);
+
+
+struct CreateAckMessage
+{
+    uint32_t session_id;
+    uint32_t member_id;
+};
+std::vector<uint8_t> serializeCreateAckMessage(const CreateAckMessage& msg);
+result<CreateAckMessage> parseCreateAckMessage(std::span<const uint8_t> data);
+
+
+struct JoinAckMessage
+{
+    uint32_t member_id;
+};
+std::vector<uint8_t> serializeJoinAckMessage(const JoinAckMessage& msg);
+result<JoinAckMessage> parseJoinAckMessage(std::span<const uint8_t> data);
 
 struct AckMessage
 {
@@ -82,6 +103,7 @@ struct MemberJoinedNotification
     std::string name;
 };
 std::vector<uint8_t> serializeMemberJoinedNotification(const MemberJoinedNotification& notif);
+result<MemberJoinedNotification> parseMemberJoinedNotification(std::span<const uint8_t> data);
 
 struct MemberLeftNotification
 {
@@ -89,6 +111,7 @@ struct MemberLeftNotification
     std::string name;
 };
 std::vector<uint8_t> serializeMemberLeftNotification(const MemberLeftNotification& notif);
+result<MemberLeftNotification> parseMemberLeftNotification(std::span<const uint8_t> data);
 
 struct SessionClosedNotification
 {

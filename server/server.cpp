@@ -180,7 +180,14 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             }
 
             register_connection(ctx.member_id, &conn);
-            sendAck(conn, "session created");
+            {
+                const auto ack_payload = serializeCreateAckMessage({.session_id = ctx.session_id, .member_id = ctx.member_id});
+                const Message ack_msg{
+                    .header = Header{.opcode = Opcode::CREATE_ACK, .flags = 0, .length = static_cast<uint32_t>(ack_payload.size())},
+                    .payload = ack_payload
+                };
+                conn.send(serializeMessage(ack_msg));
+            }
             break;
         }
     case Opcode::JOIN:
@@ -200,7 +207,14 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             }
 
             register_connection(ctx.member_id, &conn);
-            sendAck(conn, "joined session");
+            {
+                const auto ack_payload = serializeJoinAckMessage({.member_id = ctx.member_id});
+                const Message ack_msg{
+                    .header = Header{.opcode = Opcode::JOIN_ACK, .flags = 0, .length = static_cast<uint32_t>(ack_payload.size())},
+                    .payload = ack_payload
+                };
+                conn.send(serializeMessage(ack_msg));
+            }
             break;
         }
     case Opcode::LEAVE:
