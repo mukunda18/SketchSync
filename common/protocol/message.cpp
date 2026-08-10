@@ -291,3 +291,70 @@ result<MemberLeftNotification> parseMemberLeftNotification(const std::span<const
     return {.value = MemberLeftNotification{.member_id = id, .name = std::move(name)}, .err = error::none};
 }
 
+std::vector<uint8_t> serializeCanvasStateMessage(const CanvasStateMessage& msg)
+{
+    std::vector<std::vector<uint8_t>> serialized;
+    serialized.reserve(msg.operations.size());
+    size_t total = 4; // op_count
+    for (const auto& op : msg.operations)
+    {
+        serialized.push_back(serializeDrawOperation(op));
+        total += 4 + serialized.back().size(); // length prefix + data
+    }
+
+    std::vector<uint8_t> buf;
+    buf.reserve(total);
+    buf.resize(4);
+
+    const uint32_t count = htonl(static_cast<uint32_t>(msg.operations.size()));
+    std::memcpy(buf.data(), &count, 4);
+
+    for (const auto& s : serialized)
+    {
+        const uint32_t len = htonl(static_cast<uint32_t>(s.size()));
+        const size_t pos = buf.size();
+        buf.resize(pos + 4 + s.size());
+        std::memcpy(buf.data() + pos, &len, 4);
+        std::memcpy(buf.data() + pos + 4, s.data(), s.size());
+    }
+
+    return buf;
+}
+
+result<CanvasStateMessage> parseCanvasStateMessage(const std::span<const uint8_t> data)
+{
+    if (data.size() < 4)
+        return {.value = {}, .err = error::malformed, .message = "canvas state too short"};
+
+    uint32_t count;
+    std::memcpy(&count, data.data(), 4);
+    count = ntohl(count);
+
+    CanvasStateMessage msg;
+    msg.operations.reserve(count);
+
+    size_t off = 4;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        if (off + 4 > data.size())
+            return {.value = {}, .err = error::malformed, .message = "canvas state truncated"};
+
+        uint32_t len;
+        std::memcpy(&len, data.data() + off, 4);
+        len = ntohl(len);
+        off += 4;
+
+        if (off + len > data.size())
+            return {.value = {}, .err = error::malformed, .message = "operation data truncated"};
+
+        auto op_res = parseDrawOperation(std::span<const uint8_t>(data.data() + off, len));
+        if (!op_res)
+            return {.value = {}, .err = op_res.err, .message = op_res.message};
+
+        msg.operations.push_back(std::move(op_res.value));
+        off += len;
+    }
+
+    return {.value = std::move(msg), .err = error::none};
+}
+

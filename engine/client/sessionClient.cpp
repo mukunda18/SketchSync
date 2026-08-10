@@ -180,8 +180,27 @@ result<bool> sessionClient::poll()
         member_id_  = 0;
         session_id_ = 0;
         members_.clear();
+        canvas_log_.clear();
         if (on_session_closed)
             on_session_closed();
+        break;
+    }
+    case Opcode::DRAW:
+    {
+        const auto op_res = parseDrawOperation(msg.payload);
+        if (!op_res) break;
+        canvas_log_.push_back(op_res.value);
+        if (on_draw)
+            on_draw(op_res.value);
+        break;
+    }
+    case Opcode::CANVAS_STATE:
+    {
+        const auto state_res = parseCanvasStateMessage(msg.payload);
+        if (!state_res) break;
+        canvas_log_ = state_res.value.operations;
+        if (on_canvas_state)
+            on_canvas_state(canvas_log_);
         break;
     }
     default:
@@ -190,3 +209,29 @@ result<bool> sessionClient::poll()
 
     return {.value = true, .err = error::none};
 }
+
+result<bool> sessionClient::send_draw(draw_operation op)
+{
+    op.member_id = member_id_;
+    op.seq       = 0; // server assigns the real seq
+    const auto payload = serializeDrawOperation(op);
+    const Message msg{
+        .header = Header{.opcode = Opcode::DRAW, .flags = 0, .length = static_cast<uint32_t>(payload.size())},
+        .payload = payload
+    };
+    const auto r = send_message(msg);
+    if (!r) return {.value = false, .err = r.err, .message = r.message};
+    return {.value = true, .err = error::none};
+}
+
+result<bool> sessionClient::request_canvas_state()
+{
+    const Message msg{
+        .header = Header{.opcode = Opcode::CANVAS_STATE_REQUEST, .flags = 0, .length = 0},
+        .payload = {}
+    };
+    const auto r = send_message(msg);
+    if (!r) return {.value = false, .err = r.err, .message = r.message};
+    return {.value = true, .err = error::none};
+}
+
