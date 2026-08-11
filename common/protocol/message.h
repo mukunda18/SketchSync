@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common/results.h"
+#include "common/canvas/draw_operation.h"
 
 namespace Opcode
 {
@@ -16,8 +17,11 @@ namespace Opcode
     constexpr uint8_t MEMBER_JOINED = 0x05;
     constexpr uint8_t MEMBER_LEFT = 0x06;
     constexpr uint8_t SESSION_CLOSED = 0x07;
-    constexpr uint8_t CREATE_ACK = 0x08;
-    constexpr uint8_t JOIN_ACK = 0x09;
+    constexpr uint8_t CREATE_ACK           = 0x08;
+    constexpr uint8_t JOIN_ACK              = 0x09;
+    constexpr uint8_t DRAW                  = 0x0A;
+    constexpr uint8_t CANVAS_STATE_REQUEST  = 0x0B;
+    constexpr uint8_t CANVAS_STATE          = 0x0C;
 }
 
 struct Header
@@ -117,5 +121,12 @@ struct SessionClosedNotification
 {
 };
 std::vector<uint8_t> serializeSessionClosedNotification(const SessionClosedNotification& notif);
+
+struct CanvasStateMessage
+{
+    std::vector<draw_operation> operations;
+};
+std::vector<uint8_t>    serializeCanvasStateMessage(const CanvasStateMessage& msg);
+result<CanvasStateMessage> parseCanvasStateMessage(std::span<const uint8_t> data);
 
 #endif

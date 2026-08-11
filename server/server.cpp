@@ -228,6 +228,12 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
     default:
         sendError(conn, errcode::UNKNOWN, "unknown opcode");
         break;
+    case Opcode::DRAW:
+        handle_draw(payload, ctx, conn);
+        break;
+    case Opcode::CANVAS_STATE_REQUEST:
+        handle_canvas_state_request(ctx, conn);
+        break;
     }
 }
 
@@ -246,6 +252,9 @@ result<bool> server::handle_create(const uint32_t session_id, const std::string&
     new_session.host_id = member_id;
     new_session.state = session_state::open;
     new_session.created_at = std::chrono::steady_clock::now();
+
+    writers_.emplace(session_id,
+        std::make_unique<persistence_writer>("session_" + std::to_string(session_id) + ".sketchsync"));
 
     member host_member;
     host_member.id = member_id;
@@ -318,8 +327,9 @@ result<bool> server::handle_leave(clientContext& ctx)
         sess.members.erase(ctx.member_id);
     }
 
-    const uint32_t leaving_id = ctx.member_id;
-    ctx.member_id = 0;
+    const uint32_t leaving_id         = ctx.member_id;
+    const uint32_t leaving_session_id  = ctx.session_id;
+    ctx.member_id  = 0;
     ctx.session_id = 0;
 
     if (was_host || sess.members.empty())
@@ -341,6 +351,7 @@ result<bool> server::handle_leave(clientContext& ctx)
             if (auto* conn = find_connection(id))
                 conn->send(buf);
         sessions.erase(it);
+        writers_.erase(leaving_session_id);
     }
     else
     {
@@ -438,4 +449,62 @@ clientConnection* server::find_connection(const uint32_t member_id)
     std::lock_guard lock(connections_mutex);
     const auto it = connections.find(member_id);
     return it != connections.end() ? it->second : nullptr;
+}
+
+void server::handle_draw(const std::span<const uint8_t> payload, const clientContext& ctx, clientConnection& conn)
+{
+    if (ctx.member_id == 0 || ctx.session_id == 0)
+    {
+        sendError(conn, errcode::UNKNOWN, "not in a session");
+        return;
+    }
+
+    auto op_res = parseDrawOperation(payload);
+    if (!op_res)
+    {
+        sendError(conn, errcode::UNKNOWN, op_res.message);
+        return;
+    }
+
+    draw_operation op = std::move(op_res.value);
+    op.member_id = ctx.member_id; // always trust the server-side identity
+
+    std::lock_guard lock(sessions_mutex);
+    const auto it = sessions.find(ctx.session_id);
+    if (it == sessions.end())
+        return;
+
+    session& sess = it->second;
+    // append() copies op into the log and returns the assigned seq
+    const uint32_t seq = sess.canvas_log.append(op);
+    op.seq = seq;
+
+    if (const auto wit = writers_.find(ctx.session_id); wit != writers_.end())
+        wit->second->enqueue(op);
+
+    const auto draw_payload = serializeDrawOperation(op);
+    sendNotification(sess, Opcode::DRAW, draw_payload);
+}
+
+void server::handle_canvas_state_request(const clientContext& ctx, clientConnection& conn)
+{
+    if (ctx.session_id == 0)
+    {
+        sendError(conn, errcode::UNKNOWN, "not in a session");
+        return;
+    }
+
+    std::lock_guard lock(sessions_mutex);
+    const auto it = sessions.find(ctx.session_id);
+    if (it == sessions.end())
+        return;
+
+    const auto ops = it->second.canvas_log.snapshot();
+    const CanvasStateMessage state{.operations = ops};
+    const auto state_payload = serializeCanvasStateMessage(state);
+    const Message msg{
+        .header = Header{.opcode = Opcode::CANVAS_STATE, .flags = 0, .length = static_cast<uint32_t>(state_payload.size())},
+        .payload = state_payload
+    };
+    conn.send(serializeMessage(msg));
 }

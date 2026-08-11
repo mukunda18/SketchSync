@@ -14,6 +14,7 @@
 #include "common/webSocket/webSocket.h"
 #include "server/session/clientConnection.h"
 #include "server/session/session.h"
+#include "server/persistence/persistenceWriter.h"
 
 struct clientContext
 {
@@ -57,6 +58,8 @@ private:
     result<bool> handle_create(uint32_t session_id, const std::string& name, clientContext &client_context);
     result<bool> handle_join(uint32_t session_id, const std::string& name, clientContext& ctx);
     result<bool> handle_leave(clientContext& ctx);
+    void handle_draw(std::span<const uint8_t> payload, const clientContext& ctx, clientConnection& conn);
+    void handle_canvas_state_request(const clientContext& ctx, clientConnection& conn);
 
     static void sendAck(clientConnection& conn, const std::string& message_text);
     static void sendError(clientConnection& conn, uint8_t err_code, const std::string& message_text);
@@ -78,6 +81,7 @@ private:
 
     std::mutex sessions_mutex;
     std::unordered_map<uint32_t, session> sessions;
+    std::unordered_map<uint32_t, std::unique_ptr<persistence_writer>> writers_;
     session* find_session(uint32_t session_id);
 
     std::mutex connections_mutex;

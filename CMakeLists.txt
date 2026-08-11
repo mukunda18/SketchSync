@@ -13,6 +13,8 @@ add_executable(engine
         engine/engine.cpp
         engine/client/sessionClient.h
         engine/client/sessionClient.cpp
+        common/canvas/draw_operation.h
+        common/canvas/draw_operation.cpp
         common/webSocket/webSocket.h
         common/webSocket/webSocket.cpp
         common/tcp/tcpSocket.h
@@ -22,6 +24,7 @@ add_executable(engine
         common/results.h
         server/session/member.h
         server/session/session.h
+        server/session/canvas.h
         common/tcp/tcpServer.h
         common/tcp/tcpServer.cpp
         common/webSocket/webSocketServer.h
@@ -31,6 +34,8 @@ add_executable(engine
 
 add_executable(server
         server/main.cpp
+        common/canvas/draw_operation.h
+        common/canvas/draw_operation.cpp
         common/webSocket/webSocket.h
         common/webSocket/webSocket.cpp
         common/tcp/tcpSocket.h
@@ -40,12 +45,15 @@ add_executable(server
         common/results.h
         server/session/member.h
         server/session/session.h
+        server/session/canvas.h
         common/tcp/tcpServer.h
         common/tcp/tcpServer.cpp
         common/webSocket/webSocketServer.h
         common/webSocket/webSocketServer.cpp
         server/session/clientConnection.h
         server/server.cpp
+        server/persistence/persistenceWriter.h
+        server/persistence/persistenceWriter.cpp
 )
 
 
