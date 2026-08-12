@@ -7,7 +7,7 @@
 #include <chrono>
 
 #include "server/session/member.h"
-#include "server/session/canvas.h"
+#include "engine/canvas/canvas.h"
 
 enum class session_state : uint8_t
 {
@@ -27,8 +27,6 @@ struct session
 
     std::unordered_map<uint32_t, member> members;
     mutable std::mutex members_mutex;
-
-    canvas canvas_log;
 
     [[nodiscard]] bool has_member(const uint32_t id) const noexcept
     {

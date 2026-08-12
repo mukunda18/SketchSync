@@ -14,7 +14,6 @@
 #include "common/webSocket/webSocket.h"
 #include "server/session/clientConnection.h"
 #include "server/session/session.h"
-#include "server/persistence/persistenceWriter.h"
 
 struct clientContext
 {
@@ -24,8 +23,8 @@ struct clientContext
 
 struct client_thread
 {
-        std::thread thread;
-        std::atomic<bool> stop_flag{false};
+    std::thread thread;
+    std::atomic<bool> stop_flag{false};
 };
 
 struct server
@@ -46,27 +45,41 @@ private:
     void run_tcp_accept_loop();
     void run_ws_accept_loop();
 
-    void handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket raw_socket);
-    void handle_ws_client(const std::atomic<bool>& stop_flag, websocket_beast::stream<tcp::socket> raw_ws);
+    void handle_tcp_client(const std::atomic<bool>& stop_flag,
+                           tcp::socket raw_socket);
+    void handle_ws_client(const std::atomic<bool>& stop_flag,
+                          websocket_beast::stream<tcp::socket> raw_ws);
 
     void dispatch(Header header,
-        std::span<const uint8_t> payload,
-        clientContext& ctx,
-        clientConnection& conn);
+                  std::span<const uint8_t> payload,
+                  clientContext& ctx,
+                  clientConnection& conn);
 
 
-    result<bool> handle_create(uint32_t session_id, const std::string& name, clientContext &client_context);
-    result<bool> handle_join(uint32_t session_id, const std::string& name, clientContext& ctx);
+    result<bool> handle_create(uint32_t session_id, const std::string& name,
+                               clientContext& client_context);
+    result<bool> handle_join(uint32_t session_id, const std::string& name,
+                             clientContext& ctx);
     result<bool> handle_leave(clientContext& ctx);
-    void handle_draw(std::span<const uint8_t> payload, const clientContext& ctx, clientConnection& conn);
+    result<bool> handle_close_session(clientContext& ctx);
+    void handle_draw(std::span<const uint8_t> payload,
+                     const clientContext& ctx,
+                     clientConnection& conn);
     void handle_canvas_state_request(const clientContext& ctx, clientConnection& conn);
+    void handle_canvas_state(std::span<const uint8_t> payload,
+                             const clientContext& ctx,
+                             clientConnection& conn);
 
-    static void sendAck(clientConnection& conn, const std::string& message_text);
+    static void sendAck(clientConnection& conn, uint8_t ack_code, const std::string& message_text);
     static void sendError(clientConnection& conn, uint8_t err_code, const std::string& message_text);
+    void sendNotification(const session& sess,
+                          uint8_t opcode,
+                          const std::vector<uint8_t>& payload,
+                          uint32_t exclude_id = 0);
 
-    void sendNotification(const session& sess, uint8_t opcode, const std::vector<uint8_t>& payload, uint32_t exclude_id = 0);
-
-    result<bool> broadcast_to_session(const session& sess, std::span<const uint8_t> data, uint32_t exclude_member_id = 0);
+    result<bool> broadcast_to_session(const session& sess,
+                                      std::span<const uint8_t> data,
+                                      uint32_t exclude_member_id = 0);
 
     net::io_context& io_;
     tcpServer tcp_server;
@@ -81,7 +94,6 @@ private:
 
     std::mutex sessions_mutex;
     std::unordered_map<uint32_t, session> sessions;
-    std::unordered_map<uint32_t, std::unique_ptr<persistence_writer>> writers_;
     session* find_session(uint32_t session_id);
 
     std::mutex connections_mutex;

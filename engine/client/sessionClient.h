@@ -1,23 +1,14 @@
 #ifndef SKETCHSYNC_SESSIONCLIENT_H
 #define SKETCHSYNC_SESSIONCLIENT_H
 
-#include <cstdint>
-#include <functional>
+#include <vector>
 #include <string>
-#include <unordered_map>
-
 #include "common/results.h"
 #include "common/protocol/message.h"
 #include "common/canvas/draw_operation.h"
 #include "common/tcp/tcpSocket.h"
 #include "common/websocket/websocket.h"
 #include "server/session/clientConnection.h"
-
-struct remote_member
-{
-    uint32_t id;
-    std::string name;
-};
 
 struct sessionClient
 {
@@ -31,38 +22,33 @@ struct sessionClient
 
     // Returns the assigned session_id on success
     result<uint32_t> create(const std::string& name);
-    result<bool>     join(uint32_t session_id, const std::string& name);
-    result<bool>     leave();
+    result<bool> join(uint32_t session_id, const std::string& name);
+    result<bool> leave();
+    result<bool> close_session();
 
-    // Sends a draw operation; member_id and seq are filled in automatically
+    // Sends a draw operation; member_id is filled in automatically.
     result<bool> send_draw(draw_operation op);
+    result<bool> send_draw_raw(const draw_operation& op);
+    result<bool> send_canvas_state(const std::vector<draw_operation>& operations);
     result<bool> request_canvas_state();
 
-    // Receives and dispatches one incoming notification; call in a loop
-    result<bool> poll();
+    // Receives one incoming message; engine handles dispatch.
+    result<Message> poll() const;
 
-    std::function<void(uint32_t id, const std::string& name)> on_member_joined;
-    std::function<void(uint32_t id, const std::string& name)> on_member_left;
-    std::function<void()> on_session_closed;
-    std::function<void(const draw_operation&)> on_draw;
-    std::function<void(const std::vector<draw_operation>&)> on_canvas_state;
-
-    [[nodiscard]] uint32_t member_id()  const noexcept { return member_id_; }
+    [[nodiscard]] uint32_t member_id() const noexcept { return member_id_; }
     [[nodiscard]] uint32_t session_id() const noexcept { return session_id_; }
-    [[nodiscard]] bool     in_session() const noexcept { return session_id_ != 0; }
-
-    [[nodiscard]] const std::unordered_map<uint32_t, remote_member>& members() const noexcept { return members_; }
-    [[nodiscard]] const std::vector<draw_operation>& canvas_log() const noexcept { return canvas_log_; }
+    [[nodiscard]] bool in_session() const noexcept { return session_id_ != 0; }
+    [[nodiscard]] bool is_host() const noexcept { return host_; }
+    void mark_session_closed() noexcept { member_id_ = 0; session_id_ = 0; host_ = false; }
 
 private:
-    result<Message> receive_one();
-    result<size_t>  send_message(const Message& msg);
+    [[nodiscard]] result<Message> receive_one() const;
+    result<size_t> send_message(const Message& msg);
 
     clientConnection conn_;
-    uint32_t member_id_  = 0;
+    uint32_t member_id_ = 0;
     uint32_t session_id_ = 0;
-    std::unordered_map<uint32_t, remote_member> members_;
-    std::vector<draw_operation> canvas_log_;
+    bool host_ = false;
 };
 
 #endif
