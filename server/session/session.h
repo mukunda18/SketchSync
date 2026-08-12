@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "server/session/member.h"
+#include "engine/canvas/canvas.h"
 
 enum class session_state : uint8_t
 {

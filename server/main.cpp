@@ -1,21 +1,54 @@
 #include "server/server.h"
 #include <boost/asio/io_context.hpp>
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 
-int main()
+namespace
+{
+    unsigned short parse_port(const char* value, const unsigned short fallback)
+    {
+        if (!value)
+            return fallback;
+
+        try
+        {
+            const int parsed = std::stoi(value);
+            if (parsed < 0 || parsed > 65535)
+                return fallback;
+            return static_cast<unsigned short>(parsed);
+        }
+        catch (...)
+        {
+            return fallback;
+        }
+    }
+}
+
+int main(int argc, char* argv[])
 {
     try
     {
+        unsigned short ws_port = 8080;
+        unsigned short tcp_port = 9000;
+
+        for (int i = 1; i < argc; ++i)
+        {
+            if (const std::string arg = argv[i]; arg == "--ws-port" && i + 1 < argc)
+                ws_port = parse_port(argv[++i], ws_port);
+            else if (arg == "--tcp-port" && i + 1 < argc)
+                tcp_port = parse_port(argv[++i], tcp_port);
+        }
+
         net::io_context io;
-        server srv(io, 8080, 9000);
+        server srv(io, ws_port, tcp_port);
         srv.run();
 
-        std::cout << "SketchSync server started. Press Enter to stop...\n";
-        std::string line;
-        std::getline(std::cin, line);
+        std::cout << "SketchSync server started.\n";
+        while (true)
+            std::this_thread::sleep_for(std::chrono::hours(24));
 
-        srv.shutdown();
         return 0;
     }
     catch (const std::exception& ex)

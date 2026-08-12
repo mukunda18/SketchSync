@@ -1,22 +1,26 @@
 #include "engine/client/sessionClient.h"
 
 sessionClient::sessionClient(tcpSocket& tcp)
-    : conn_{ .tcp = &tcp }
-{}
+    : conn_{.tcp = &tcp}
+{
+}
 
 sessionClient::sessionClient(webSocket& ws)
-    : conn_{ .ws = &ws }
-{}
+    : conn_{.ws = &ws}
+{
+}
 
-result<Message> sessionClient::receive_one()
+result<Message> sessionClient::receive_one() const
 {
     if (conn_.tcp)
     {
-        auto hdr_res = conn_.tcp->receive(Header::SIZE);
-        if (!hdr_res) return {.value = {}, .err = hdr_res.err, .message = hdr_res.message};
+        const auto hdr_res = conn_.tcp->receive(Header::SIZE);
+        if (!hdr_res)
+            return {.value = {}, .err = hdr_res.err, .message = hdr_res.message};
 
-        auto parse = parseHeader(hdr_res.value);
-        if (!parse) return {.value = {}, .err = parse.err, .message = parse.message};
+        const auto parse = parseHeader(hdr_res.value);
+        if (!parse)
+            return {.value = {}, .err = parse.err, .message = parse.message};
 
         const Header hdr = parse.value;
         std::vector<uint8_t> payload;
@@ -24,7 +28,8 @@ result<Message> sessionClient::receive_one()
         if (hdr.length > 0)
         {
             auto pl = conn_.tcp->receive(hdr.length);
-            if (!pl) return {.value = {}, .err = pl.err, .message = pl.message};
+            if (!pl)
+                return {.value = {}, .err = pl.err, .message = pl.message};
             payload = std::move(pl.value);
         }
 
@@ -33,11 +38,13 @@ result<Message> sessionClient::receive_one()
 
     if (conn_.ws)
     {
-        auto res = conn_.ws->receive();
-        if (!res) return {.value = {}, .err = res.err, .message = res.message};
+        const auto res = conn_.ws->receive();
+        if (!res)
+            return {.value = {}, .err = res.err, .message = res.message};
 
-        auto parse = parseHeader(res.value);
-        if (!parse) return {.value = {}, .err = parse.err, .message = parse.message};
+        const auto parse = parseHeader(res.value);
+        if (!parse)
+            return {.value = {}, .err = parse.err, .message = parse.message};
 
         const Header hdr = parse.value;
         std::vector<uint8_t> payload(res.value.begin() + Header::SIZE, res.value.end());
@@ -65,7 +72,8 @@ result<uint32_t> sessionClient::create(const std::string& name)
         return {.value = 0, .err = r.err, .message = r.message};
 
     const auto res = receive_one();
-    if (!res) return {.value = 0, .err = res.err, .message = res.message};
+    if (!res)
+        return {.value = 0, .err = res.err, .message = res.message};
 
     if (res.value.header.opcode == Opcode::ERROR_MSG)
     {
@@ -73,15 +81,19 @@ result<uint32_t> sessionClient::create(const std::string& name)
         return {.value = 0, .err = error::rejected, .message = err ? err.value.err_message : "server error"};
     }
 
-    if (res.value.header.opcode != Opcode::CREATE_ACK)
+    if (res.value.header.opcode != Opcode::ACK)
         return {.value = 0, .err = error::malformed, .message = "unexpected response opcode"};
 
     const auto ack = parseCreateAckMessage(res.value.payload);
-    if (!ack) return {.value = 0, .err = ack.err, .message = ack.message};
+    if (!ack)
+        return {.value = 0, .err = ack.err, .message = ack.message};
 
-    member_id_  = ack.value.member_id;
+    if (ack.value.ack_code != ackcode::CREATE_OK)
+        return {.value = 0, .err = error::malformed, .message = "unexpected create ack code"};
+
+    member_id_ = ack.value.member_id;
     session_id_ = ack.value.session_id;
-    members_[member_id_] = remote_member{.id = member_id_, .name = name};
+    host_ = true;
 
     return {.value = session_id_, .err = error::none};
 }
@@ -98,7 +110,8 @@ result<bool> sessionClient::join(const uint32_t session_id, const std::string& n
         return {.value = false, .err = r.err, .message = r.message};
 
     const auto res = receive_one();
-    if (!res) return {.value = false, .err = res.err, .message = res.message};
+    if (!res)
+        return {.value = false, .err = res.err, .message = res.message};
 
     if (res.value.header.opcode == Opcode::ERROR_MSG)
     {
@@ -106,15 +119,22 @@ result<bool> sessionClient::join(const uint32_t session_id, const std::string& n
         return {.value = false, .err = error::rejected, .message = err ? err.value.err_message : "server error"};
     }
 
-    if (res.value.header.opcode != Opcode::JOIN_ACK)
+    if (res.value.header.opcode != Opcode::ACK)
         return {.value = false, .err = error::malformed, .message = "unexpected response opcode"};
 
     const auto ack = parseJoinAckMessage(res.value.payload);
-    if (!ack) return {.value = false, .err = ack.err, .message = ack.message};
+    if (!ack)
+        return {.value = false, .err = ack.err, .message = ack.message};
 
-    member_id_  = ack.value.member_id;
+    if (ack.value.ack_code != ackcode::JOIN_OK)
+        return {.value = false, .err = error::malformed, .message = "unexpected join ack code"};
+
+    member_id_ = ack.value.member_id;
     session_id_ = session_id;
-    members_[member_id_] = remote_member{.id = member_id_, .name = name};
+    host_ = false;
+
+    if (const auto state_request = request_canvas_state(); !state_request)
+        return state_request;
 
     return {.value = true, .err = error::none};
 }
@@ -130,7 +150,8 @@ result<bool> sessionClient::leave()
         return {.value = false, .err = r.err, .message = r.message};
 
     const auto res = receive_one();
-    if (!res) return {.value = false, .err = res.err, .message = res.message};
+    if (!res)
+        return {.value = false, .err = res.err, .message = res.message};
 
     if (res.value.header.opcode == Opcode::ERROR_MSG)
     {
@@ -141,52 +162,116 @@ result<bool> sessionClient::leave()
     if (res.value.header.opcode != Opcode::ACK)
         return {.value = false, .err = error::malformed, .message = "unexpected response opcode"};
 
-    member_id_  = 0;
+    if (const auto ack = parseAckMessage(res.value.payload); !ack)
+        return {.value = false, .err = ack.err, .message = ack.message};
+
+    member_id_ = 0;
     session_id_ = 0;
-    members_.clear();
+    host_ = false;
 
     return {.value = true, .err = error::none};
 }
 
-result<bool> sessionClient::poll()
+result<bool> sessionClient::close_session()
 {
+    if (!host_)
+        return {.value = false, .err = error::rejected, .message = "only the host can close the session"};
+
+    const Message msg{
+        .header = Header{.opcode = Opcode::CLOSE_SESSION, .flags = 0, .length = 0},
+        .payload = {}
+    };
+
+    if (const auto r = send_message(msg); !r)
+        return {.value = false, .err = r.err, .message = r.message};
+
     const auto res = receive_one();
-    if (!res) return {.value = false, .err = res.err, .message = res.message};
+    if (!res)
+        return {.value = false, .err = res.err, .message = res.message};
 
-    const auto& msg = res.value;
+    if (res.value.header.opcode == Opcode::ERROR_MSG)
+    {
+        const auto err = parseErrorMessage(res.value.payload);
+        return {.value = false, .err = error::rejected, .message = err ? err.value.err_message : "server error"};
+    }
 
-    switch (msg.header.opcode)
-    {
-    case Opcode::MEMBER_JOINED:
-    {
-        const auto notif = parseMemberJoinedNotification(msg.payload);
-        if (!notif) break;
-        members_[notif.value.member_id] = remote_member{.id = notif.value.member_id, .name = notif.value.name};
-        if (on_member_joined)
-            on_member_joined(notif.value.member_id, notif.value.name);
-        break;
-    }
-    case Opcode::MEMBER_LEFT:
-    {
-        const auto notif = parseMemberLeftNotification(msg.payload);
-        if (!notif) break;
-        members_.erase(notif.value.member_id);
-        if (on_member_left)
-            on_member_left(notif.value.member_id, notif.value.name);
-        break;
-    }
-    case Opcode::SESSION_CLOSED:
-    {
-        member_id_  = 0;
-        session_id_ = 0;
-        members_.clear();
-        if (on_session_closed)
-            on_session_closed();
-        break;
-    }
-    default:
-        return {.value = false, .err = error::malformed, .message = "unexpected opcode in poll"};
-    }
+    if (res.value.header.opcode != Opcode::ACK)
+        return {.value = false, .err = error::malformed, .message = "unexpected response opcode"};
+
+    const auto ack = parseAckMessage(res.value.payload);
+    if (!ack)
+        return {.value = false, .err = ack.err, .message = ack.message};
+
+    if (ack.value.ack_code != ackcode::OK)
+        return {.value = false, .err = error::malformed, .message = "unexpected close ack code"};
+
+    member_id_ = 0;
+    session_id_ = 0;
+    host_ = false;
+
+    return {.value = true, .err = error::none};
+}
+
+result<Message> sessionClient::poll() const
+{
+    return receive_one();
+}
+
+result<bool> sessionClient::request_canvas_state()
+{
+    if (!in_session())
+        return {.value = false, .err = error::rejected, .message = "not in a session"};
+
+    const Message msg{
+        .header = Header{.opcode = Opcode::CANVAS_STATE_REQUEST, .flags = 0, .length = 0},
+        .payload = {}
+    };
+    if (const auto r = send_message(msg); !r)
+        return {.value = false, .err = r.err, .message = r.message};
+    return {.value = true, .err = error::none};
+}
+
+result<bool> sessionClient::send_draw(draw_operation op)
+{
+    op.member_id = member_id_;
+    const auto payload = serializeDrawOperation(op);
+    const Message msg{
+        .header = Header{.opcode = Opcode::DRAW, .flags = 0, .length = static_cast<uint32_t>(payload.size())},
+        .payload = payload
+    };
+    if (const auto r = send_message(msg); !r)
+        return {.value = false, .err = r.err, .message = r.message};
+    return {.value = true, .err = error::none};
+}
+
+result<bool> sessionClient::send_draw_raw(const draw_operation& op)
+{
+    const auto payload = serializeDrawOperation(op);
+    const Message msg{
+        .header = Header{.opcode = Opcode::DRAW, .flags = 0, .length = static_cast<uint32_t>(payload.size())},
+        .payload = payload
+    };
+
+    if (const auto r = send_message(msg); !r)
+        return {.value = false, .err = r.err, .message = r.message};
+
+    return {.value = true, .err = error::none};
+}
+
+result<bool> sessionClient::send_canvas_state(const std::vector<draw_operation>& operations)
+{
+    if (!host_)
+        return {.value = false, .err = error::rejected, .message = "only the host can send canvas state"};
+
+    const CanvasStateMessage state{.operations = operations};
+    const auto payload = serializeCanvasStateMessage(state);
+    const Message msg{
+        .header = Header{.opcode = Opcode::CANVAS_STATE, .flags = 0, .length = static_cast<uint32_t>(payload.size())},
+        .payload = payload
+    };
+
+    if (const auto r = send_message(msg); !r)
+        return {.value = false, .err = r.err, .message = r.message};
 
     return {.value = true, .err = error::none};
 }
