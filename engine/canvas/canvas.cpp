@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <queue>
 #include <ranges>
 #include <utility>
 
@@ -140,11 +141,12 @@ void canvas::rasterize(const draw_operation& op)
     const auto put = [this, &op](const int x, const int y) {
         const int radius = std::max(0, static_cast<int>(op.thickness) / 2);
         const uint32_t color = op.tool == tool_type::eraser ? 0xFFFFFFFF : op.color;
+        const bool square_tip = op.tool == tool_type::brush;
         for (int dy = -radius; dy <= radius; ++dy)
         {
             for (int dx = -radius; dx <= radius; ++dx)
             {
-                if (dx * dx + dy * dy > radius * radius)
+                if (!square_tip && dx * dx + dy * dy > radius * radius)
                     continue;
                 const int px = x + dx;
                 const int py = y + dy;
@@ -174,7 +176,7 @@ void canvas::rasterize(const draw_operation& op)
         }
     };
 
-    if (op.tool == tool_type::freehand || op.tool == tool_type::eraser || op.tool == tool_type::line)
+    if (op.tool == tool_type::freehand || op.tool == tool_type::eraser || op.tool == tool_type::brush || op.tool == tool_type::line)
     {
         for (size_t i = op.tool == tool_type::line ? op.points.size() - 1 : 1; i < op.points.size(); ++i)
         {
@@ -262,6 +264,36 @@ void canvas::rasterize(const draw_operation& op)
             }
         }
     }
+    else if (op.tool == tool_type::bucket_fill && !op.points.empty())
+    {
+        auto [fx, fy] = point(op.points[0]);
+        if (static_cast<uint32_t>(fx) >= width || static_cast<uint32_t>(fy) >= height)
+            return;
+        const uint32_t target = pixels[static_cast<size_t>(fy) * width + fx];
+        if (target == op.color)
+            return;
+        pixels[static_cast<size_t>(fy) * width + fx] = op.color;
+        std::queue<std::pair<int, int>> q;
+        q.emplace(fx, fy);
+        while (!q.empty())
+        {
+            auto [x, y] = q.front();
+            q.pop();
+            const auto try_fill = [&](const int nx, const int ny) {
+                if (nx >= 0 && ny >= 0 &&
+                    static_cast<uint32_t>(nx) < width && static_cast<uint32_t>(ny) < height &&
+                    pixels[static_cast<size_t>(ny) * width + nx] == target)
+                {
+                    pixels[static_cast<size_t>(ny) * width + nx] = op.color;
+                    q.emplace(nx, ny);
+                }
+            };
+            try_fill(x + 1, y);
+            try_fill(x - 1, y);
+            try_fill(x, y + 1);
+            try_fill(x, y - 1);
+        }
+    }
 }
 
 std::optional<draw_operation> process_canvas_input(
@@ -289,20 +321,22 @@ std::optional<draw_operation> process_canvas_input(
     if (temporary && (input.down || (input.released && input.inside)))
     {
         auto& points = temporary->points;
-        if (tool != tool_type::freehand && tool != tool_type::eraser)
+        if (tool == tool_type::freehand || tool == tool_type::eraser || tool == tool_type::brush)
         {
+            const int dx = points.empty() ? 0 : static_cast<int>(input.position.x) - points.back().x;
+            const int dy = points.empty() ? 0 : static_cast<int>(input.position.y) - points.back().y;
+            if (points.empty() || dx * dx + dy * dy >= 32 * 32)
+                temporary->points.push_back(input.position);
+        }
+        else if (tool != tool_type::bucket_fill)
+        {
+            // shape tools: track start + current end point
             if (points.size() == 1)
                 points.push_back(input.position);
             else if (!points.empty())
                 points.back() = input.position;
         }
-        else
-        {
-        const int dx = points.empty() ? 0 : static_cast<int>(input.position.x) - points.back().x;
-        const int dy = points.empty() ? 0 : static_cast<int>(input.position.y) - points.back().y;
-        if (points.empty() || dx * dx + dy * dy >= 32 * 32)
-            temporary->points.push_back(input.position);
-        }
+        // bucket_fill: single click — no drag updates
     }
 
     if (!temporary || !input.released)

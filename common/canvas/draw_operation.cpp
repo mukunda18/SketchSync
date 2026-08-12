@@ -69,7 +69,7 @@ result<bool> validateDrawOperation(const draw_operation& op, const bool require_
                     : "uncommitted operation has a sequence"};
     if (op.member_id == 0)
         return {.value = false, .err = error::malformed, .message = "member ID is missing"};
-    if (static_cast<uint8_t>(op.tool) > static_cast<uint8_t>(tool_type::filled_ellipse))
+    if (static_cast<uint8_t>(op.tool) > static_cast<uint8_t>(tool_type::brush))
         return {.value = false, .err = error::malformed, .message = "unknown drawing tool"};
     if (op.thickness == 0 || op.thickness > max_thickness)
         return {.value = false, .err = error::malformed, .message = "invalid stroke thickness"};
@@ -85,8 +85,10 @@ result<bool> validateDrawOperation(const draw_operation& op, const bool require_
               op.tool == tool_type::filled_rect || op.tool == tool_type::filled_ellipse) &&
              op.points.size() != 2)
         return {.value = false, .err = error::malformed, .message = "shape requires two points"};
-    else if ((op.tool == tool_type::freehand || op.tool == tool_type::eraser) && op.points.empty())
+    else if ((op.tool == tool_type::freehand || op.tool == tool_type::eraser || op.tool == tool_type::brush) && op.points.empty())
         return {.value = false, .err = error::malformed, .message = "stroke has no points"};
+    else if (op.tool == tool_type::bucket_fill && op.points.empty())
+        return {.value = false, .err = error::malformed, .message = "bucket fill has no point"};
 
     return {.value = true, .err = error::none};
 }

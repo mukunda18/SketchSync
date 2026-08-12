@@ -16,6 +16,8 @@ enum class tool_type : uint8_t
     clear = 0x05,
     filled_rect = 0x06,
     filled_ellipse = 0x07,
+    bucket_fill = 0x08,
+    brush = 0x09,
 };
 
 struct canvas_point

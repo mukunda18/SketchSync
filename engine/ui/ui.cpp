@@ -79,13 +79,21 @@ namespace ui
         return CheckCollisionPointRec(GetMousePosition(), rect) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
     }
 
-    void draw_button(const struct Rectangle rect, const char* label)
+    void draw_button(const struct Rectangle rect, const char* label, const bool active)
     {
         const Vector2 mouse = GetMousePosition();
         const bool hovered = CheckCollisionPointRec(mouse, rect);
-        const Color fill = hovered ? Color{.r = 98, .g = 102, .b = 114, .a = 255} : Color{.r = 72, .g = 76, .b = 88, .a = 255};
+        Color fill;
+        if (active && hovered)
+            fill = Color{.r = 82, .g = 140, .b = 240, .a = 255};
+        else if (active)
+            fill = Color{.r = 52, .g = 120, .b = 220, .a = 255};
+        else if (hovered)
+            fill = Color{.r = 98, .g = 102, .b = 114, .a = 255};
+        else
+            fill = Color{.r = 72, .g = 76, .b = 88, .a = 255};
         DrawRectangleRec(rect, fill);
-        DrawRectangleLinesEx(rect, 1.0f, Color{.r = 165, .g = 170, .b = 184, .a = 255});
+        DrawRectangleLinesEx(rect, active ? 2.0f : 1.0f, Color{.r = 165, .g = 170, .b = 184, .a = 255});
 
         constexpr int text_size = 18;
         const int text_width = MeasureText(label, text_size);

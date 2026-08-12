@@ -68,6 +68,7 @@ private:
     std::optional<draw_operation> active_stroke;
     tool_type active_tool = tool_type::freehand;
     uint32_t active_color = 0xFF1F1F1F;
+    uint8_t active_thickness = 2;
     std::atomic<uint32_t> next_operation_number{1};
     std::unordered_set<uint64_t> pending_operations;
     mutable std::mutex pending_mutex;

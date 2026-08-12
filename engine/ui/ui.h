@@ -42,7 +42,7 @@ namespace ui
     bool has_points(const draw_operation& op);
 
     bool button_hit(struct Rectangle rect);
-    void draw_button(struct Rectangle rect, const char* label);
+    void draw_button(struct Rectangle rect, const char* label, bool active = false);
 
     bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status);
     void sync_texture(Texture2D& texture, const std::vector<uint32_t>& pixels,
