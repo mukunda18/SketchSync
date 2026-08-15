@@ -6,6 +6,47 @@
 #include <ranges>
 #include <utility>
 
+namespace
+{
+    [[nodiscard]] uint8_t blend_channel(const uint8_t dst, const uint8_t src, const float src_alpha)
+    {
+        const float out = static_cast<float>(src) * src_alpha +
+                          static_cast<float>(dst) * (1.0f - src_alpha);
+        return static_cast<uint8_t>(std::clamp(out, 0.0f, 255.0f));
+    }
+
+    [[nodiscard]] uint32_t alpha_blend_over(const uint32_t dst_argb, const uint32_t src_argb, const float coverage)
+    {
+        const uint8_t src_a = static_cast<uint8_t>((src_argb >> 24) & 0xFF);
+        if (src_a == 0 || coverage <= 0.0f)
+            return dst_argb;
+
+        const float src_alpha = (static_cast<float>(src_a) / 255.0f) * std::clamp(coverage, 0.0f, 1.0f);
+
+        const uint8_t dst_a = static_cast<uint8_t>((dst_argb >> 24) & 0xFF);
+        const uint8_t dst_r = static_cast<uint8_t>((dst_argb >> 16) & 0xFF);
+        const uint8_t dst_g = static_cast<uint8_t>((dst_argb >> 8) & 0xFF);
+        const uint8_t dst_b = static_cast<uint8_t>(dst_argb & 0xFF);
+
+        const uint8_t src_r = static_cast<uint8_t>((src_argb >> 16) & 0xFF);
+        const uint8_t src_g = static_cast<uint8_t>((src_argb >> 8) & 0xFF);
+        const uint8_t src_b = static_cast<uint8_t>(src_argb & 0xFF);
+
+        const float dst_alpha = static_cast<float>(dst_a) / 255.0f;
+        const float out_alpha = src_alpha + dst_alpha * (1.0f - src_alpha);
+
+        const uint8_t out_r = blend_channel(dst_r, src_r, src_alpha);
+        const uint8_t out_g = blend_channel(dst_g, src_g, src_alpha);
+        const uint8_t out_b = blend_channel(dst_b, src_b, src_alpha);
+        const uint8_t out_a = static_cast<uint8_t>(std::clamp(out_alpha * 255.0f, 0.0f, 255.0f));
+
+        return (static_cast<uint32_t>(out_a) << 24) |
+               (static_cast<uint32_t>(out_r) << 16) |
+               (static_cast<uint32_t>(out_g) << 8) |
+               static_cast<uint32_t>(out_b);
+    }
+}
+
 uint32_t canvas::get_width() const
 {
     std::lock_guard lock(operations_mutex);
@@ -138,20 +179,44 @@ void canvas::rasterize(const draw_operation& op)
         };
     };
 
-    const auto put = [this, &op](const int x, const int y) {
-        const int radius = std::max(0, static_cast<int>(op.thickness) / 2);
-        const uint32_t color = op.tool == tool_type::eraser ? 0xFFFFFFFF : op.color;
+    const auto blend_pixel = [this](const int x, const int y, const uint32_t color, const float coverage) {
+        if (x < 0 || y < 0 || static_cast<uint32_t>(x) >= width || static_cast<uint32_t>(y) >= height)
+            return;
+
+        auto& dst = pixels[static_cast<size_t>(y) * width + x];
+        dst = alpha_blend_over(dst, color, coverage);
+    };
+
+    const auto put = [this, &op, &blend_pixel](const float cx, const float cy) {
+        const float radius = std::max(0.5f, static_cast<float>(op.thickness) * 0.5f);
+        const uint32_t color = op.tool == tool_type::eraser ? background : op.color;
         const bool square_tip = op.tool == tool_type::brush;
-        for (int dy = -radius; dy <= radius; ++dy)
+
+        const int min_x = static_cast<int>(std::floor(cx - radius - 1.0f));
+        const int max_x = static_cast<int>(std::ceil(cx + radius + 1.0f));
+        const int min_y = static_cast<int>(std::floor(cy - radius - 1.0f));
+        const int max_y = static_cast<int>(std::ceil(cy + radius + 1.0f));
+
+        for (int y = min_y; y <= max_y; ++y)
         {
-            for (int dx = -radius; dx <= radius; ++dx)
+            for (int x = min_x; x <= max_x; ++x)
             {
-                if (!square_tip && dx * dx + dy * dy > radius * radius)
+                if (square_tip)
+                {
+                    const float edge_x = (radius + 0.5f) - std::abs((static_cast<float>(x) + 0.5f) - cx);
+                    const float edge_y = (radius + 0.5f) - std::abs((static_cast<float>(y) + 0.5f) - cy);
+                    const float coverage = std::clamp(std::min(edge_x, edge_y), 0.0f, 1.0f);
+                    if (coverage > 0.0f)
+                        blend_pixel(x, y, color, coverage);
                     continue;
-                const int px = x + dx;
-                const int py = y + dy;
-                if (px >= 0 && py >= 0 && static_cast<uint32_t>(px) < width && static_cast<uint32_t>(py) < height)
-                    pixels[static_cast<size_t>(py) * width + px] = color;
+                }
+
+                const float dx = (static_cast<float>(x) + 0.5f) - cx;
+                const float dy = (static_cast<float>(y) + 0.5f) - cy;
+                const float dist = std::sqrt(dx * dx + dy * dy);
+                const float coverage = std::clamp((radius + 0.5f) - dist, 0.0f, 1.0f);
+                if (coverage > 0.0f)
+                    blend_pixel(x, y, color, coverage);
             }
         }
     };
@@ -159,20 +224,15 @@ void canvas::rasterize(const draw_operation& op)
     auto [x0, y0] = point(op.points.front());
     auto [x1, y1] = point(op.points.back());
 
-    const auto line = [&put](int ax, int ay, const int bx, const int by) {
-        int dx = std::abs(bx - ax);
-        const int sx = ax < bx ? 1 : -1;
-        int dy = -std::abs(by - ay);
-        const int sy = ay < by ? 1 : -1;
-        int error = dx + dy;
-        while (true)
+    const auto line = [&put](const float ax, const float ay, const float bx, const float by) {
+        const float dx = bx - ax;
+        const float dy = by - ay;
+        const float distance = std::sqrt(dx * dx + dy * dy);
+        const int steps = std::max(1, static_cast<int>(std::ceil(distance * 2.0f)));
+        for (int i = 0; i <= steps; ++i)
         {
-            put(ax, ay);
-            if (ax == bx && ay == by)
-                break;
-            const int doubled = 2 * error;
-            if (doubled >= dy) { error += dy; ax += sx; }
-            if (doubled <= dx) { error += dx; ay += sy; }
+            const float t = static_cast<float>(i) / static_cast<float>(steps);
+            put(ax + dx * t, ay + dy * t);
         }
     };
 
@@ -181,7 +241,7 @@ void canvas::rasterize(const draw_operation& op)
         for (size_t i = op.tool == tool_type::line ? op.points.size() - 1 : 1; i < op.points.size(); ++i)
         {
             auto [x, y] = point(op.points[i]);
-            line(x0, y0, x, y);
+            line(static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(x), static_cast<float>(y));
             x0 = x;
             y0 = y;
         }
@@ -192,7 +252,7 @@ void canvas::rasterize(const draw_operation& op)
         {
             for (int y = std::min(y0, y1); y <= std::max(y0, y1); ++y)
                 for (int x = std::min(x0, x1); x <= std::max(x0, x1); ++x)
-                    put(x, y);
+                    put(static_cast<float>(x), static_cast<float>(y));
             return;
         }
         line(x0, y0, x1, y0);
@@ -230,10 +290,10 @@ void canvas::rasterize(const draw_operation& op)
         double decision = ry2 - rx2 * ry + 0.25 * rx2;
         while (px < py)
         {
-            put(cx + static_cast<int>(x), cy + static_cast<int>(y));
-            put(cx - static_cast<int>(x), cy + static_cast<int>(y));
-            put(cx - static_cast<int>(x), cy - static_cast<int>(y));
-            put(cx + static_cast<int>(x), cy - static_cast<int>(y));
+            put(static_cast<float>(cx + static_cast<int>(x)), static_cast<float>(cy + static_cast<int>(y)));
+            put(static_cast<float>(cx - static_cast<int>(x)), static_cast<float>(cy + static_cast<int>(y)));
+            put(static_cast<float>(cx - static_cast<int>(x)), static_cast<float>(cy - static_cast<int>(y)));
+            put(static_cast<float>(cx + static_cast<int>(x)), static_cast<float>(cy - static_cast<int>(y)));
             ++x;
             px += 2 * ry2;
             if (decision < 0)
@@ -248,10 +308,10 @@ void canvas::rasterize(const draw_operation& op)
         decision = ry2 * (x + 0.5) * (x + 0.5) + rx2 * (y - 1) * (y - 1) - rx2 * ry2;
         while (y >= 0)
         {
-            put(cx + static_cast<int>(x), cy + static_cast<int>(y));
-            put(cx - static_cast<int>(x), cy + static_cast<int>(y));
-            put(cx - static_cast<int>(x), cy - static_cast<int>(y));
-            put(cx + static_cast<int>(x), cy - static_cast<int>(y));
+            put(static_cast<float>(cx + static_cast<int>(x)), static_cast<float>(cy + static_cast<int>(y)));
+            put(static_cast<float>(cx - static_cast<int>(x)), static_cast<float>(cy + static_cast<int>(y)));
+            put(static_cast<float>(cx - static_cast<int>(x)), static_cast<float>(cy - static_cast<int>(y)));
+            put(static_cast<float>(cx + static_cast<int>(x)), static_cast<float>(cy - static_cast<int>(y)));
             --y;
             py -= 2 * rx2;
             if (decision > 0)

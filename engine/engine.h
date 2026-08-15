@@ -52,10 +52,12 @@ private:
     void set_status(std::string value);
     [[nodiscard]] std::string get_status() const;
     void open_and_load();
+    void join_session();
     void clear_canvas();
     void process_canvas_input(const canvas_input_state& input);
     void poll_session();
     result<bool> start_local_server();
+    result<bool> connect_to_server();
     void stop_local_server();
     void rebuild_render_texture();
 
@@ -69,6 +71,8 @@ private:
     tool_type active_tool = tool_type::freehand;
     uint32_t active_color = 0xFF1F1F1F;
     uint8_t active_thickness = 2;
+    std::string join_session_id_input;
+    bool join_input_active = false;
     std::atomic<uint32_t> next_operation_number{1};
     std::unordered_set<uint64_t> pending_operations;
     mutable std::mutex pending_mutex;
