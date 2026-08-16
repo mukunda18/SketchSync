@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -73,6 +74,52 @@ void sketch_app::open_and_load()
             dirty.store(true);
         }
     }
+
+void sketch_app::join_session()
+{
+    if (session_client)
+    {
+        set_status("already connected");
+        return;
+    }
+    if (join_session_id_input.empty())
+    {
+        set_status("Enter a session ID");
+        return;
+    }
+
+    uint32_t session_id = 0;
+    const auto* begin = join_session_id_input.data();
+    const auto* end = begin + join_session_id_input.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, session_id);
+    if (ec != std::errc{} || ptr != end || session_id == 0)
+    {
+        set_status("Invalid session ID");
+        return;
+    }
+
+    if (const auto connect_result = connect_to_server(); !connect_result)
+    {
+        set_status(connect_result.message);
+        return;
+    }
+
+    if (const auto join_result = session_client->join(session_id, "SketchSync"); !join_result)
+    {
+        set_status(join_result.message);
+        if (tcp_socket && tcp_socket->is_open())
+            tcp_socket->close();
+        session_client.reset();
+        tcp_socket.reset();
+        io_context.reset();
+        return;
+    }
+
+    stop_poll.store(false);
+    poll_thread = std::thread(&sketch_app::poll_session, this);
+    set_status("Joined session #" + std::to_string(session_id));
+    dirty.store(true);
+}
 
 void sketch_app::clear_canvas()
 {
@@ -294,29 +341,11 @@ result<bool> sketch_app::start_local_server()
         if (!process_result)
             return process_result;
 
-        io_context = std::make_unique<net::io_context>();
-        tcp_socket.emplace(tcp_addr{.host = "127.0.0.1", .port = "9000"}, *io_context);
-
-        result connect_result{.value = false, .err = error::connect_failed, .message = "failed to connect to server"};
-        for (int attempt = 0; attempt < 50; ++attempt)
+        if (const auto connect_result = connect_to_server(); !connect_result)
         {
-            connect_result = tcp_socket->connect();
-            if (connect_result)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        if (!connect_result)
-        {
-            if (tcp_socket && tcp_socket->is_open())
-                tcp_socket->close();
-            tcp_socket.reset();
-            io_context.reset();
             local_server.stop(1);
             return connect_result;
         }
-
-        session_client = std::make_unique<sessionClient>(*tcp_socket);
 
         if (const auto create_result = session_client->create("SketchSync"); !create_result)
         {
@@ -331,10 +360,40 @@ result<bool> sketch_app::start_local_server()
 
         stop_poll.store(false);
         poll_thread = std::thread(&sketch_app::poll_session, this);
-        set_status("Local server started");
+        set_status("Hosting session #" + std::to_string(create_result.value));
         dirty.store(true);
         return {.value = true, .err = error::none, .message = {}};
     }
+
+result<bool> sketch_app::connect_to_server()
+{
+    if (session_client)
+        return {.value = false, .err = error::rejected, .message = "already connected"};
+
+    io_context = std::make_unique<net::io_context>();
+    tcp_socket.emplace(tcp_addr{.host = "127.0.0.1", .port = "9000"}, *io_context);
+
+    result connect_result{.value = false, .err = error::connect_failed, .message = "failed to connect to server"};
+    for (int attempt = 0; attempt < 50; ++attempt)
+    {
+        connect_result = tcp_socket->connect();
+        if (connect_result)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (!connect_result)
+    {
+        if (tcp_socket && tcp_socket->is_open())
+            tcp_socket->close();
+        tcp_socket.reset();
+        io_context.reset();
+        return connect_result;
+    }
+
+    session_client = std::make_unique<sessionClient>(*tcp_socket);
+    return {.value = true, .err = error::none, .message = {}};
+}
 
 void sketch_app::stop_local_server()
     {
@@ -346,17 +405,25 @@ void sketch_app::stop_local_server()
         if (poll_thread.joinable())
             poll_thread.join();
 
+        const bool had_local_process = local_server.running();
+        const bool had_session = session_client && session_client->in_session();
+
         session_client.reset();
         tcp_socket.reset();
         io_context.reset();
         local_server.stop();
-        set_status("Local server stopped");
+        if (had_local_process)
+            set_status("Local server stopped");
+        else if (had_session)
+            set_status("Disconnected from session");
+        else
+            set_status("Not connected");
         dirty.store(true);
     }
 
     int sketch_app::run()
     {
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+        SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
         InitWindow(ui::WINDOW_WIDTH, ui::WINDOW_HEIGHT, "SketchSync");
         SetWindowMinSize(900, 600);
         const Image image = GenImageColor(static_cast<int>(surface.width), static_cast<int>(surface.height), WHITE);
@@ -400,6 +467,7 @@ void sketch_app::stop_local_server()
             const float open_width = window_width * 0.085f;
             const float clear_width = window_width * 0.070f;
             const float start_width = window_width * 0.105f;
+            const float join_width = window_width * 0.082f;
             const float stop_width = window_width * 0.085f;
             const Rectangle open_button{
                 .x = bar_padding, .y = button_y, .width = open_width, .height = button_height};
@@ -409,9 +477,17 @@ void sketch_app::stop_local_server()
             const Rectangle start_button{
                 .x = clear_button.x + clear_button.width + button_gap,
                 .y = button_y, .width = start_width, .height = button_height};
-            const Rectangle stop_button{
+            const Rectangle join_button{
                 .x = start_button.x + start_button.width + button_gap,
+                .y = button_y, .width = join_width, .height = button_height};
+            const Rectangle stop_button{
+                .x = join_button.x + join_button.width + button_gap,
                 .y = button_y, .width = stop_width, .height = button_height};
+            const Rectangle join_input_rect{
+                .x = stop_button.x + stop_button.width + button_gap,
+                .y = button_y,
+                .width = std::min(window_width * 0.14f, std::max(110.0f, window_width * 0.10f)),
+                .height = button_height};
 
             constexpr std::array<std::pair<tool_type, const char*>, 9> tools{{
                 {tool_type::freehand, "Freehand"},
@@ -464,8 +540,27 @@ void sketch_app::stop_local_server()
                     set_status(result.message);
             }
 
+            if (ui::button_hit(join_button))
+                join_session();
+
             if (ui::button_hit(stop_button))
                 stop_local_server();
+
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+                join_input_active = CheckCollisionPointRec(mouse, join_input_rect);
+
+            if (join_input_active)
+            {
+                while (const int key = GetCharPressed())
+                {
+                    if (key >= '0' && key <= '9' && join_session_id_input.size() < 10)
+                        join_session_id_input.push_back(static_cast<char>(key));
+                }
+                if (IsKeyPressed(KEY_BACKSPACE) && !join_session_id_input.empty())
+                    join_session_id_input.pop_back();
+                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))
+                    join_session();
+            }
 
             for (size_t i = 0; i < tools.size(); ++i)
             {
@@ -537,7 +632,18 @@ void sketch_app::stop_local_server()
             ui::draw_button(open_button, "Open File");
             ui::draw_button(clear_button, "Clear");
             ui::draw_button(start_button, "Start Server");
+            ui::draw_button(join_button, "Join");
             ui::draw_button(stop_button, "Stop Server");
+            DrawRectangleRec(join_input_rect, Color{.r = 255, .g = 255, .b = 255, .a = 255});
+            DrawRectangleLinesEx(join_input_rect, join_input_active ? 2.0f : 1.0f,
+                                 join_input_active ? Color{.r = 52, .g = 120, .b = 220, .a = 255}
+                                                   : Color{.r = 165, .g = 170, .b = 184, .a = 255});
+            DrawText(join_session_id_input.empty() ? "Session ID" : join_session_id_input.c_str(),
+                     static_cast<int>(join_input_rect.x + 8.0f),
+                     static_cast<int>(join_input_rect.y + (join_input_rect.height - 16.0f) * 0.5f),
+                     16,
+                     join_session_id_input.empty() ? Color{.r = 140, .g = 145, .b = 156, .a = 255}
+                                                   : Color{.r = 52, .g = 56, .b = 66, .a = 255});
             for (size_t i = 0; i < tools.size(); ++i)
             {
                 const Rectangle tool_button{
@@ -597,6 +703,13 @@ void sketch_app::stop_local_server()
             DrawText(status_text.c_str(), static_cast<int>(window_width * 0.70f),
                      static_cast<int>(top_bar_height * 0.38f), detail_size,
                      Color{.r = 92, .g = 96, .b = 108, .a = 255});
+                const std::string session_text = session_client && session_client->in_session()
+                                                            ? (std::string("Session #") + std::to_string(session_client->session_id()) +
+                                                                (session_client->is_host() ? " (Host)" : " (Guest)"))
+                                                            : "Session: none";
+                DrawText(session_text.c_str(), static_cast<int>(window_width * 0.70f),
+                            static_cast<int>(top_bar_height * 0.68f), detail_size,
+                            Color{.r = 92, .g = 96, .b = 108, .a = 255});
 
             DrawTexturePro(canvas_texture,
                            Rectangle{.x = 0.0f,
