@@ -21,10 +21,10 @@ struct sessionClient
     sessionClient& operator=(sessionClient&&) = delete;
 
     // Returns the assigned session_id on success
-    result<uint32_t> create(const std::string& name);
-    result<bool> join(uint32_t session_id, const std::string& name);
-    result<bool> leave();
-    result<bool> close_session();
+    result<bool> send_create(const std::string& name);
+    result<bool> send_join(uint32_t session_id, const std::string& name);
+    result<bool> send_leave();
+    result<bool> send_close_session();
 
     // Sends a draw operation; member_id is filled in automatically.
     result<bool> send_draw(draw_operation op);
@@ -33,16 +33,21 @@ struct sessionClient
     result<bool> request_canvas_state();
 
     // Receives one incoming message; engine handles dispatch.
-    result<Message> poll() const;
+    [[nodiscard]] result<Message> poll() const;
 
     [[nodiscard]] uint32_t member_id() const noexcept { return member_id_; }
     [[nodiscard]] uint32_t session_id() const noexcept { return session_id_; }
     [[nodiscard]] bool in_session() const noexcept { return session_id_ != 0; }
     [[nodiscard]] bool is_host() const noexcept { return host_; }
     void mark_session_closed() noexcept { member_id_ = 0; session_id_ = 0; host_ = false; }
+    void set_session_info(const uint32_t member_id, const uint32_t session_id, const bool host) {
+        member_id_ = member_id;
+        session_id_ = session_id;
+        host_ = host;
+    }
 
 private:
-    [[nodiscard]] result<Message> receive_one() const;
+    [[nodiscard]] result<Message> receive_msg() const;
     result<size_t> send_message(const Message& msg);
 
     clientConnection conn_;

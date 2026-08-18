@@ -27,10 +27,14 @@
 #define CloseWindow Win32CloseWindow
 #define ShowCursor Win32ShowCursor
 #include "common/tcp/tcpSocket.h"
+#include "common/websocket/websocket.h"
+#include "common/udp/udpSocket.h"
+#include "common/udp/udpDiscovery.h"
 #undef ShowCursor
 #undef CloseWindow
 #include "engine/canvas/canvas.h"
 #include "engine/client/sessionClient.h"
+#include "engine/client/network_session_state.h"
 #include "engine/persistence/persistenceWriter.h"
 #include "engine/process/server_process.h"
 
@@ -39,6 +43,8 @@
 #ifdef DrawText
 #undef DrawText
 #endif
+
+#include "engine/ui/app_layout.h"
 
 struct sketch_app
 {
@@ -53,13 +59,32 @@ private:
     [[nodiscard]] std::string get_status() const;
     void open_and_load();
     void join_session();
+    void create_session();
+    void leave_session(); 
+    void handle_leave();
     void clear_canvas();
     void process_canvas_input(const canvas_input_state& input);
+
     void poll_session();
+
     result<bool> start_local_server();
-    result<bool> connect_to_server();
+    result<bool> connect_to_server(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
+    void async_connect_to_server();
+    void async_start_local_server();
+    void async_tcp_discover_and_join(uint32_t session_id);
+    void async_ws_connect_and_join(uint32_t session_id);
+    void async_ws_connect_and_create();
+    void stop_connect_thread();
+    void handle_disconnect();
+    void disconnect();
     void stop_local_server();
     void rebuild_render_texture();
+
+    void handle_notification(const std::vector<uint8_t>& payload);
+    void handle_draw(const std::vector<uint8_t>& payload);
+    void handle_canvas_state(const std::vector<uint8_t>& payload);
+    void handle_ack(const Message& msg);
+    void handle_error(const std::vector<uint8_t>& payload);
 
     canvas surface;
     Texture2D canvas_texture{};
@@ -71,8 +96,10 @@ private:
     tool_type active_tool = tool_type::freehand;
     uint32_t active_color = 0xFF1F1F1F;
     uint8_t active_thickness = 2;
-    std::string join_session_id_input;
-    bool join_input_active = false;
+
+    network_session_state net_state;
+    ui::AppLayout layout;
+
     std::atomic<uint32_t> next_operation_number{1};
     std::unordered_set<uint64_t> pending_operations;
     mutable std::mutex pending_mutex;
@@ -80,11 +107,19 @@ private:
     server_process local_server;
     std::unique_ptr<persistence_writer> operation_log;
     std::unique_ptr<net::io_context> io_context;
-    std::optional<tcpSocket> tcp_socket;
+    std::unique_ptr<tcpSocket> tcp_socket;
+    std::unique_ptr<webSocket> ws_socket;
+    std::unique_ptr<udpSocket> udp_socket;
     std::unique_ptr<sessionClient> session_client;
+
     std::thread poll_thread;
+    std::thread connect_thread;
     std::atomic<bool> stop_poll{false};
+    std::atomic<bool> connecting{false};
+    std::atomic<net::io_context*> connecting_io{nullptr};
+
     mutable std::mutex status_mutex;
+    mutable std::mutex net_mutex;
 };
 
 #endif

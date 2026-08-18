@@ -15,22 +15,22 @@ namespace
         return static_cast<uint8_t>(std::clamp(out, 0.0f, 255.0f));
     }
 
-    [[nodiscard]] uint32_t alpha_blend_over(const uint32_t dst_argb, const uint32_t src_argb, const float coverage)
+    [[nodiscard]] uint32_t alpha_blend_over(const uint32_t dst_rgba, const uint32_t src_rgba, const float coverage)
     {
-        const uint8_t src_a = static_cast<uint8_t>((src_argb >> 24) & 0xFF);
+        const uint8_t src_a = static_cast<uint8_t>((src_rgba >> 24) & 0xFF);
         if (src_a == 0 || coverage <= 0.0f)
-            return dst_argb;
+            return dst_rgba;
 
         const float src_alpha = (static_cast<float>(src_a) / 255.0f) * std::clamp(coverage, 0.0f, 1.0f);
 
-        const uint8_t dst_a = static_cast<uint8_t>((dst_argb >> 24) & 0xFF);
-        const uint8_t dst_r = static_cast<uint8_t>((dst_argb >> 16) & 0xFF);
-        const uint8_t dst_g = static_cast<uint8_t>((dst_argb >> 8) & 0xFF);
-        const uint8_t dst_b = static_cast<uint8_t>(dst_argb & 0xFF);
+        const uint8_t dst_r = static_cast<uint8_t>(dst_rgba & 0xFF);
+        const uint8_t dst_g = static_cast<uint8_t>((dst_rgba >> 8) & 0xFF);
+        const uint8_t dst_b = static_cast<uint8_t>((dst_rgba >> 16) & 0xFF);
+        const uint8_t dst_a = static_cast<uint8_t>((dst_rgba >> 24) & 0xFF);
 
-        const uint8_t src_r = static_cast<uint8_t>((src_argb >> 16) & 0xFF);
-        const uint8_t src_g = static_cast<uint8_t>((src_argb >> 8) & 0xFF);
-        const uint8_t src_b = static_cast<uint8_t>(src_argb & 0xFF);
+        const uint8_t src_r = static_cast<uint8_t>(src_rgba & 0xFF);
+        const uint8_t src_g = static_cast<uint8_t>((src_rgba >> 8) & 0xFF);
+        const uint8_t src_b = static_cast<uint8_t>((src_rgba >> 16) & 0xFF);
 
         const float dst_alpha = static_cast<float>(dst_a) / 255.0f;
         const float out_alpha = src_alpha + dst_alpha * (1.0f - src_alpha);
@@ -41,9 +41,9 @@ namespace
         const uint8_t out_a = static_cast<uint8_t>(std::clamp(out_alpha * 255.0f, 0.0f, 255.0f));
 
         return (static_cast<uint32_t>(out_a) << 24) |
-               (static_cast<uint32_t>(out_r) << 16) |
+               (static_cast<uint32_t>(out_b) << 16) |
                (static_cast<uint32_t>(out_g) << 8) |
-               static_cast<uint32_t>(out_b);
+               static_cast<uint32_t>(out_r);
     }
 }
 
@@ -281,8 +281,8 @@ void canvas::rasterize(const draw_operation& op)
             }
             return;
         }
-        long long rx2 = static_cast<long long>(rx) * rx;
-        long long ry2 = static_cast<long long>(ry) * ry;
+        const long long rx2 = static_cast<long long>(rx) * rx;
+        const long long ry2 = static_cast<long long>(ry) * ry;
         long long x = 0;
         long long y = ry;
         long long px = 0;

@@ -32,6 +32,8 @@ namespace ui
     constexpr uint32_t HOST_COLOR = 0xFF1F1F1F;
     constexpr uint32_t BACKGROUND_COLOR = 0xFFFFFFFF;
 
+    extern Font default_font;
+
     void close_window();
 
     Color argb_to_color(uint32_t argb);
@@ -45,7 +47,7 @@ namespace ui
     void draw_button(struct Rectangle rect, const char* label, bool active = false);
 
     bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status);
-    void sync_texture(Texture2D& texture, const std::vector<uint32_t>& pixels,
+    void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels,
                       std::vector<Color>& upload_buffer);
 }
 

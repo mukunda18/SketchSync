@@ -35,6 +35,7 @@ private:
 
     void* process_handle_ = nullptr;
     void* thread_handle_ = nullptr;
+    void* job_handle_ = nullptr;
     bool running_ = false;
 };
 
