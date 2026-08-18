@@ -6,6 +6,7 @@
 #include <chrono>
 #include <charconv>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -20,6 +21,8 @@
 #include "engine/ui/file_dialog.h"
 #include "engine/ui/ui.h"
 #include "common/network_constants.h"
+#include "common/bytes.h"
+
 
 sketch_app::sketch_app() : layout()
 {
@@ -66,18 +69,141 @@ void sketch_app::open_and_load()
 {
     if (const auto path = ui::open_binary_file_dialog(); path.has_value())
     {
-        current_file = path->string();
         std::string load_status;
-        if (!ui::load_binary_replay(path.value(), surface, load_status))
-            current_file = "untitled";
+        uint32_t saved_seq = 0;
+        if (!ui::load_binary_replay(path.value(), surface, load_status, saved_seq))
+        {
+            set_status(std::move(load_status));
+        }
         else
         {
+            current_file = path->string();
+            file_saved_seq = saved_seq;
+            set_status(std::move(load_status));
+            
             operation_log.reset();
-            operation_log = std::make_unique<persistence_writer>(path->string());
+            if (auto_save_on)
+            {
+                operation_log = std::make_unique<persistence_writer>(path->string(), file_saved_seq);
+            }
         }
-        set_status(std::move(load_status));
         active_stroke.reset();
         dirty.store(true);
+    }
+}
+
+void sketch_app::save_to_file(const std::filesystem::path& path)
+{
+    bool was_auto_save = auto_save_on;
+    if (was_auto_save)
+    {
+        operation_log.reset();
+    }
+
+    std::ofstream file(path, std::ios::binary);
+    if (!file.is_open())
+    {
+        set_status("Failed to save file");
+        if (was_auto_save)
+        {
+            operation_log = std::make_unique<persistence_writer>(path.string(), file_saved_seq);
+        }
+        return;
+    }
+
+    std::vector<draw_operation> ops = surface.snapshot();
+    uint32_t max_seq = 0;
+    for (const auto& op : ops)
+    {
+        if (op.seq > max_seq)
+        {
+            max_seq = op.seq;
+        }
+    }
+
+    constexpr std::array<uint8_t, 4> MAGIC{'S', 'K', 'S', 'Y'};
+    file.write(reinterpret_cast<const char*>(MAGIC.data()), MAGIC.size());
+    constexpr std::array<uint8_t, 4> VERSION{0, 0, 0, 1}; // version 1
+    file.write(reinterpret_cast<const char*>(VERSION.data()), VERSION.size());
+    
+    std::vector<uint8_t> seq_buf(4);
+    size_t off = 0;
+    bytes::write32(seq_buf, off, max_seq);
+    file.write(reinterpret_cast<const char*>(seq_buf.data()), seq_buf.size());
+    
+    constexpr std::array<uint8_t, 4> RESERVED{0, 0, 0, 0};
+    file.write(reinterpret_cast<const char*>(RESERVED.data()), RESERVED.size());
+
+    for (const auto& op : ops)
+    {
+        const auto payload = serializeDrawOperation(op);
+        std::vector<uint8_t> length_prefix(4);
+        size_t off_op = 0;
+        bytes::write32(length_prefix, off_op, static_cast<uint32_t>(payload.size()));
+        file.write(reinterpret_cast<const char*>(length_prefix.data()), static_cast<std::streamsize>(length_prefix.size()));
+        file.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+    }
+
+    file.flush();
+    file.close();
+
+    file_saved_seq = max_seq;
+    current_file = path.string();
+    set_status("Saved canvas state");
+
+    if (was_auto_save)
+    {
+        operation_log = std::make_unique<persistence_writer>(path.string(), file_saved_seq);
+    }
+}
+
+void sketch_app::save_as()
+{
+    std::string default_name = "untitled.sketchsync";
+    if (current_file != "untitled")
+    {
+        default_name = std::filesystem::path(current_file).filename().string();
+    }
+    if (const auto path = ui::save_binary_file_dialog(default_name); path.has_value())
+    {
+        save_to_file(path.value());
+    }
+}
+
+void sketch_app::toggle_auto_save()
+{
+    if (auto_save_on)
+    {
+        auto_save_on = false;
+        operation_log.reset();
+        set_status("Auto-Save disabled");
+    }
+    else
+    {
+        if (current_file == "untitled")
+        {
+            set_status("Save the file first to enable Auto-Save");
+            save_as();
+            if (current_file == "untitled")
+            {
+                return;
+            }
+        }
+        
+        auto_save_on = true;
+        file_saved_seq = ui::read_saved_seq(current_file);
+        
+        operation_log = std::make_unique<persistence_writer>(current_file, file_saved_seq);
+        
+        std::vector<draw_operation> ops = surface.snapshot();
+        for (const auto& op : ops)
+        {
+            if (op.seq > file_saved_seq)
+            {
+                operation_log->enqueue(op);
+            }
+        }
+        set_status("Auto-Save enabled");
     }
 }
 
@@ -299,13 +425,21 @@ void sketch_app::handle_draw(const std::vector<uint8_t>& payload)
         if (op.seq > expected) { session_client->request_canvas_state(); return; }
         if (op.seq < expected) return;
         op.seq = surface.apply(op);
+        if (operation_log) operation_log->enqueue(op);
     }
     dirty.store(true);
 }
 
 void sketch_app::handle_canvas_state(const std::vector<uint8_t>& payload)
 {
-    if (const auto state_res = parseCanvasStateMessage(payload)) { surface.load(state_res.value.operations); dirty.store(true); set_status("Canvas synchronized"); }
+    if (const auto state_res = parseCanvasStateMessage(payload)) {
+        surface.load(state_res.value.operations);
+        dirty.store(true);
+        set_status("Canvas synchronized");
+        // Signal render thread to do a file save (cannot touch operation_log here — it's render-thread-owned)
+        if (auto_save_on && current_file != "untitled")
+            canvas_synced_pending_.store(true);
+    }
 }
 
 void sketch_app::handle_ack(const Message& msg)
@@ -779,6 +913,82 @@ void sketch_app::stop_local_server() {
     set_status("Local server stopped");
 }
 
+// Maps a canvas_point (0-65535 normalized) to screen coords inside canvas_rect
+static Vector2 canvas_to_screen(const canvas_point p, const Rectangle& r)
+{
+    return Vector2{
+        .x = r.x + (static_cast<float>(p.x) / 65535.0f) * r.width,
+        .y = r.y + (static_cast<float>(p.y) / 65535.0f) * r.height
+    };
+}
+
+// Draws the active in-progress stroke as a GPU overlay — no pixel buffer touched.
+// Shape tools (rect, ellipse, line) are rendered here; freehand/brush/eraser go
+// through copy_pixels_with_preview as before (incremental, already fast).
+static bool draw_stroke_preview(const draw_operation& op, const Rectangle& canvas_rect)
+{
+    if (op.points.size() < 2) return false;
+
+    const Vector2 p0 = canvas_to_screen(op.points.front(), canvas_rect);
+    const Vector2 p1 = canvas_to_screen(op.points.back(),  canvas_rect);
+    const Color   c  = ui::argb_to_color(op.color);
+
+    // Thickness maps to screen pixels proportionally; minimum 1 px.
+    const float thickness = std::max(1.0f,
+        static_cast<float>(op.thickness) * canvas_rect.width / static_cast<float>(1280));
+
+    switch (op.tool)
+    {
+    case tool_type::line:
+        DrawLineEx(p0, p1, thickness, c);
+        return true;
+
+    case tool_type::rect:
+    {
+        const float x = std::min(p0.x, p1.x);
+        const float y = std::min(p0.y, p1.y);
+        const float w = std::abs(p1.x - p0.x);
+        const float h = std::abs(p1.y - p0.y);
+        DrawRectangleLinesEx({x, y, w, h}, thickness, c);
+        return true;
+    }
+
+    case tool_type::filled_rect:
+    {
+        const float x = std::min(p0.x, p1.x);
+        const float y = std::min(p0.y, p1.y);
+        const float w = std::abs(p1.x - p0.x);
+        const float h = std::abs(p1.y - p0.y);
+        DrawRectangleRec({x, y, w, h}, c);
+        return true;
+    }
+
+    case tool_type::ellipse:
+    {
+        const float cx = (p0.x + p1.x) * 0.5f;
+        const float cy = (p0.y + p1.y) * 0.5f;
+        const float rx = std::max(1.0f, std::abs(p1.x - p0.x) * 0.5f);
+        const float ry = std::max(1.0f, std::abs(p1.y - p0.y) * 0.5f);
+        DrawEllipseLines(static_cast<int>(cx), static_cast<int>(cy),
+                         rx, ry, c);
+        return true;
+    }
+
+    case tool_type::filled_ellipse:
+    {
+        const float cx = (p0.x + p1.x) * 0.5f;
+        const float cy = (p0.y + p1.y) * 0.5f;
+        const float rx = std::max(1.0f, std::abs(p1.x - p0.x) * 0.5f);
+        const float ry = std::max(1.0f, std::abs(p1.y - p0.y) * 0.5f);
+        DrawEllipse(static_cast<int>(cx), static_cast<int>(cy), rx, ry, c);
+        return true;
+    }
+
+    default:
+        return false; // freehand/brush/eraser handled by caller
+    }
+}
+
 int sketch_app::run()
 {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
@@ -816,7 +1026,14 @@ int sketch_app::run()
 
         // UI Logic Updates
         if (layout.open_btn.update()) open_and_load();
+        if (layout.save_btn.update()) { if (current_file == "untitled") save_as(); else save_to_file(current_file); }
+        if (layout.save_as_btn.update()) save_as();
+        if (layout.auto_save_btn.update()) toggle_auto_save();
         if (layout.clear_btn.update()) clear_canvas();
+
+        // Deferred: canvas was synced by session on poll thread; do the file save here (render thread owns operation_log)
+        if (canvas_synced_pending_.exchange(false))
+            save_to_file(current_file);
 
         if (layout.connect_btn.update()) {
             if (is_connected) {
@@ -892,15 +1109,33 @@ int sketch_app::run()
             const Vector2 mouse = GetMousePosition();
             process_canvas_input({.inside = CheckCollisionPointRec(mouse, canvas_rect), .pressed = IsMouseButtonPressed(MOUSE_LEFT_BUTTON), .down = IsMouseButtonDown(MOUSE_LEFT_BUTTON), .released = IsMouseButtonReleased(MOUSE_LEFT_BUTTON), .position = ui::normalize_point(ui::clamp_to_canvas(mouse, canvas_rect), canvas_rect), .tool = active_tool});
         }
-
         if (dirty.load()) { rebuild_render_texture(); dirty.store(false); }
-        if (active_stroke.has_value()) ui::sync_texture(canvas_texture, surface.copy_pixels_with_preview(*active_stroke), upload_buffer);
+        if (active_stroke.has_value())
+        {
+            const tool_type t = active_stroke->tool;
+            const bool is_pixel_tool = (t == tool_type::freehand ||
+                                        t == tool_type::brush    ||
+                                        t == tool_type::eraser);
+            if (is_pixel_tool)
+                ui::sync_texture(canvas_texture,
+                                 surface.copy_pixels_with_preview(*active_stroke),
+                                 upload_buffer);
+        }
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        layout.draw(net_state, get_status(), current_file, is_running);
+        layout.draw(net_state, get_status(), current_file, is_running, auto_save_on);
 
-        DrawTexturePro(canvas_texture, {.x = 0,.y = 0,.width = static_cast<float>(canvas_texture.width), .height = static_cast<float>(canvas_texture.height)}, canvas_rect, {.x = 0,.y = 0}, 0, WHITE);
+        // Draw the committed canvas texture.
+        DrawTexturePro(canvas_texture,
+            {.x = 0, .y = 0,
+             .width  = static_cast<float>(canvas_texture.width),
+             .height = static_cast<float>(canvas_texture.height)},
+            canvas_rect, {.x = 0, .y = 0}, 0, WHITE);
+
+        if (active_stroke.has_value())
+            draw_stroke_preview(*active_stroke, canvas_rect);
+
         DrawRectangleLinesEx(canvas_rect, 1, DARKGRAY);
         EndDrawing();
     }

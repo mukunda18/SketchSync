@@ -58,6 +58,9 @@ private:
     void set_status(std::string value);
     [[nodiscard]] std::string get_status() const;
     void open_and_load();
+    void save_to_file(const std::filesystem::path& path);
+    void save_as();
+    void toggle_auto_save();
     void join_session();
     void create_session();
     void leave_session(); 
@@ -93,6 +96,8 @@ private:
     std::string status = "Ready";
     std::atomic<bool> dirty{true};
     std::optional<draw_operation> active_stroke;
+    bool auto_save_on = false;
+    uint32_t file_saved_seq = 0;
     tool_type active_tool = tool_type::freehand;
     uint32_t active_color = 0xFF1F1F1F;
     uint8_t active_thickness = 2;
@@ -114,9 +119,10 @@ private:
 
     std::thread poll_thread;
     std::thread connect_thread;
-    std::atomic<bool> stop_poll{false};
-    std::atomic<bool> connecting{false};
+    std::atomic<bool>       stop_poll{false};
+    std::atomic<bool>       connecting{false};
     std::atomic<net::io_context*> connecting_io{nullptr};
+    std::atomic<bool>       canvas_synced_pending_{false}; // set by poll thread, consumed by render thread
 
     mutable std::mutex status_mutex;
     mutable std::mutex net_mutex;

@@ -21,6 +21,9 @@ namespace ui {
         Panel bottom_panel;
 
         Button open_btn;
+        Button save_btn;
+        Button save_as_btn;
+        Button auto_save_btn;
         Button clear_btn;
 
         // Network Controls
@@ -42,7 +45,7 @@ namespace ui {
         std::vector<Button> thickness_buttons;
 
         void update_layout(float window_width, float window_height, connection_protocol protocol = connection_protocol::tcp);
-        void draw(const network_session_state& net, const std::string& status, const std::string& current_file, bool server_running) const;
+        void draw(const network_session_state& net, const std::string& status, const std::string& current_file, bool server_running, bool auto_save_on) const;
     };
 }
 

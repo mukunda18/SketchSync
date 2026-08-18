@@ -58,8 +58,11 @@ namespace ui {
         right_panel.bounds = {.x = window_width - right_panel_width, .y = top_bar_height, .width = right_panel_width, .height = window_height - top_bar_height};
         bottom_panel.bounds = {.x = 0, .y = window_height - bottom_panel_height, .width = window_width, .height = bottom_panel_height};
 
-        open_btn.bounds = {.x = 15, .y = 12, .width = 90, .height = 30}; open_btn.label = "Open";
-        clear_btn.bounds = {.x = 115, .y = 12, .width = 90, .height = 30}; clear_btn.label = "Clear";
+        open_btn.bounds = {.x = 15, .y = 10, .width = 60, .height = 30}; open_btn.label = "Open";
+        save_btn.bounds = {.x = 80, .y = 10, .width = 60, .height = 30}; save_btn.label = "Save";
+        save_as_btn.bounds = {.x = 145, .y = 10, .width = 80, .height = 30}; save_as_btn.label = "Save As";
+        auto_save_btn.bounds = {.x = 230, .y = 10, .width = 110, .height = 30}; auto_save_btn.label = "Auto-Save";
+        clear_btn.bounds = {.x = 345, .y = 10, .width = 75, .height = 30}; clear_btn.label = "Clear";
 
         if (protocol == connection_protocol::websocket) {
             host_field.bounds = {.x = 15, .y = window_height - 120, .width = 200, .height = 30}; host_field.label = "Server Address";
@@ -98,7 +101,7 @@ namespace ui {
         for (size_t i = 0; i < color_swatches.size(); ++i) color_swatches[i].bounds = {.x = window_width - right_panel_width + 15 + static_cast<float>(i % 4) * 45, .y = next_y + 25 + static_cast<float>(i / 4) * 45, .width = 40, .height = 40};
     }
 
-    void AppLayout::draw(const network_session_state& net, const std::string& status, const std::string& current_file, const bool server_running) const {
+    void AppLayout::draw(const network_session_state& net, const std::string& status, const std::string& current_file, const bool server_running, const bool auto_save_on) const {
         left_panel.draw();
         right_panel.draw();
         bottom_panel.draw();
@@ -108,6 +111,14 @@ namespace ui {
         DrawTextLayout(current_file.c_str(), GetScreenWidth()/2 - 30, 34, 11.0f, GRAY);
 
         open_btn.draw();
+        save_btn.draw();
+        save_as_btn.draw();
+        
+        Button auto_save = auto_save_btn;
+        auto_save.active = auto_save_on;
+        auto_save.label = auto_save_on ? "Auto-Save" : "Auto-Save";
+        auto_save.draw();
+
         clear_btn.draw();
 
         // Left Info

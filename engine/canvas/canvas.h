@@ -28,8 +28,6 @@ struct canvas
     mutable std::mutex raster_mutex;
     std::vector<draw_operation> operations;
     std::unordered_set<uint64_t> operation_ids;
-
-    uint32_t append(draw_operation op);
     std::vector<draw_operation> snapshot() const;
     [[nodiscard]] bool contains_operation(uint64_t operation_id) const;
     [[nodiscard]] uint32_t next_sequence() const noexcept { return next_seq.load(); }
