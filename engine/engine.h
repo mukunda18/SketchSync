@@ -28,6 +28,8 @@
 #define ShowCursor Win32ShowCursor
 #include "common/tcp/tcpSocket.h"
 #include "common/websocket/websocket.h"
+#include "common/udp/udpSocket.h"
+#include "common/udp/udpDiscovery.h"
 #undef ShowCursor
 #undef CloseWindow
 #include "engine/canvas/canvas.h"
@@ -69,6 +71,9 @@ private:
     result<bool> connect_to_server(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
     void async_connect_to_server();
     void async_start_local_server();
+    void async_tcp_discover_and_join(uint32_t session_id);
+    void async_ws_connect_and_join(uint32_t session_id);
+    void async_ws_connect_and_create();
     void stop_connect_thread();
     void handle_disconnect();
     void disconnect();
@@ -104,6 +109,7 @@ private:
     std::unique_ptr<net::io_context> io_context;
     std::unique_ptr<tcpSocket> tcp_socket;
     std::unique_ptr<webSocket> ws_socket;
+    std::unique_ptr<udpSocket> udp_socket;
     std::unique_ptr<sessionClient> session_client;
 
     std::thread poll_thread;

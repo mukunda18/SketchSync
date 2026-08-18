@@ -13,7 +13,47 @@ namespace ui {
         }
     }
 
-    void AppLayout::update_layout(const float window_width, const float window_height) {
+    static void DrawTextWrapped(const std::string& text, const int x, int y, const float max_width, const float font_size, const Color color) {
+        if (text.empty()) return;
+        
+        std::string current_line;
+        size_t start = 0;
+        const float line_height = font_size + 4.0f;
+        
+        while (start < text.size()) {
+            const size_t next_space = text.find(' ', start);
+            std::string word;
+            if (next_space == std::string::npos) {
+                word = text.substr(start);
+                start = text.size();
+            } else {
+                word = text.substr(start, next_space - start + 1);
+                start = next_space + 1;
+            }
+            
+            const std::string test_line = current_line + word;
+            float text_width = 0.0f;
+            if (IsFontValid(default_font)) {
+                text_width = MeasureTextEx(default_font, test_line.c_str(), font_size, 0.0f).x;
+            } else {
+                text_width = static_cast<float>(MeasureText(test_line.c_str(), static_cast<int>(font_size)));
+            }
+            
+            if (text_width > max_width && !current_line.empty()) {
+                DrawTextLayout(current_line.c_str(), x, y, font_size, color);
+                y += static_cast<int>(line_height);
+                current_line = word;
+            } else {
+                current_line = test_line;
+            }
+        }
+        
+        if (!current_line.empty()) {
+            DrawTextLayout(current_line.c_str(), x, y, font_size, color);
+        }
+    }
+
+    void AppLayout::update_layout(const float window_width, const float window_height, const connection_protocol protocol) {
         left_panel.bounds = {.x = 0, .y = top_bar_height, .width = left_panel_width, .height = window_height - top_bar_height};
         right_panel.bounds = {.x = window_width - right_panel_width, .y = top_bar_height, .width = right_panel_width, .height = window_height - top_bar_height};
         bottom_panel.bounds = {.x = 0, .y = window_height - bottom_panel_height, .width = window_width, .height = bottom_panel_height};
@@ -21,12 +61,18 @@ namespace ui {
         open_btn.bounds = {.x = 15, .y = 12, .width = 90, .height = 30}; open_btn.label = "Open";
         clear_btn.bounds = {.x = 115, .y = 12, .width = 90, .height = 30}; clear_btn.label = "Clear";
 
-        host_field.bounds = {.x = 15, .y = window_height - 120, .width = 200, .height = 30}; host_field.label = "Server Address";
-        port_field.bounds = {.x = 15, .y = window_height - 65, .width = 200, .height = 30}; port_field.label = "Port";
+        if (protocol == connection_protocol::websocket) {
+            host_field.bounds = {.x = 15, .y = window_height - 120, .width = 200, .height = 30}; host_field.label = "Server Address";
+            port_field.bounds = {.x = 15, .y = window_height - 65, .width = 200, .height = 30}; port_field.label = "Port";
 
-        protocol_toggle.bounds = {.x = 230, .y = window_height - 120, .width = 90, .height = 30};
-        connect_btn.bounds = {.x = 230, .y = window_height - 70, .width = 110, .height = 35};
-        local_server_btn.bounds = {.x = 350, .y = window_height - 70, .width = 150, .height = 35};
+            protocol_toggle.bounds = {.x = 230, .y = window_height - 120, .width = 90, .height = 30};
+            connect_btn.bounds = {.x = 230, .y = window_height - 70, .width = 110, .height = 35};
+            local_server_btn.bounds = {.x = 350, .y = window_height - 70, .width = 150, .height = 35};
+        } else {
+            protocol_toggle.bounds = {.x = 15, .y = window_height - 120, .width = 90, .height = 30};
+            connect_btn.bounds = {.x = 15, .y = window_height - 70, .width = 110, .height = 35};
+            local_server_btn.bounds = {.x = 135, .y = window_height - 70, .width = 150, .height = 35};
+        }
 
         session_id_field.bounds = {.x = window_width - 215, .y = window_height - 120, .width = 200, .height = 30}; session_id_field.label = "Session ID";
         join_btn.bounds = {.x = window_width - 385, .y = window_height - 70, .width = 80, .height = 35}; join_btn.label = "Join";
@@ -66,13 +112,22 @@ namespace ui {
 
         // Left Info
         DrawTextLayout("Network Info", 15, static_cast<int>(top_bar_height) + 15, 18.0f, DARKGRAY);
-        DrawTextLayout(TextFormat("Host: %s:%s", net.net.host.c_str(), net.net.port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
+        if (net.net.protocol == connection_protocol::tcp) {
+            if (net.net.connected) {
+                DrawTextLayout(TextFormat("TCP: %s:%s", net.net.host.c_str(), net.net.port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
+            } else {
+                DrawTextLayout("TCP: UDP Discovery", 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
+            }
+        } else {
+            DrawTextLayout(TextFormat("WS: %s:%s", net.net.host.c_str(), net.net.port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
+        }
+
         const char* s_str = net.net.connected ? "Connected" : (net.state == connection_state::connecting ? "Connecting..." : "Disconnected");
         const Color s_col = net.net.connected ? GREEN : (net.state == connection_state::connecting ? ORANGE : RED);
         DrawTextLayout(TextFormat("Status: %s", s_str), 15, static_cast<int>(top_bar_height) + 65, 14.0f, s_col);
         if (net.session.in_session) DrawTextLayout(TextFormat("Session: #%d (M:%d)", net.session.session_id, net.session.member_id), 15, static_cast<int>(top_bar_height) + 110, 14.0f, BLUE);
         else DrawTextLayout("Not in session", 15, static_cast<int>(top_bar_height) + 110, 14.0f, GRAY);
-        DrawTextLayout(status.c_str(), 15, static_cast<int>(top_bar_height) + 155, 12.0f, DARKBLUE);
+        DrawTextWrapped(status, 15, static_cast<int>(top_bar_height) + 145, left_panel_width - 30.0f, 13.0f, DARKBLUE);
 
         // Right Tools
         DrawTextLayout("Tools", GetScreenWidth() - static_cast<int>(right_panel_width) + 15, static_cast<int>(top_bar_height) + 15, 18.0f, DARKGRAY);
@@ -85,8 +140,10 @@ namespace ui {
         for (const auto& cs : color_swatches) cs.draw();
 
         // Controls
-        host_field.draw();
-        port_field.draw();
+        if (net.net.protocol == connection_protocol::websocket) {
+            host_field.draw();
+            port_field.draw();
+        }
 
         Button proto = protocol_toggle;
         proto.label = (net.net.protocol == connection_protocol::tcp) ? "TCP" : "WS";

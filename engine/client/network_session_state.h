@@ -3,6 +3,7 @@
 
 #include <string>
 #include <cstdint>
+#include "common/network_constants.h"
 
 enum class connection_protocol {
     none,
@@ -29,8 +30,8 @@ enum class session_joining_state {
 
 struct network_info {
     connection_protocol protocol = connection_protocol::tcp;
-    std::string host = "127.0.0.1";
-    std::string port = "9000";
+    std::string host = std::string(net_config::DEFAULT_HOST);
+    std::string port = std::string(net_config::DEFAULT_TCP_PORT_STR);
     bool connected = false;
 };
 
@@ -48,16 +49,6 @@ struct network_session_state {
     connection_state state = connection_state::disconnected;
     session_joining_state session_state = session_joining_state::none;
     std::string error_message;
-    
-    // Backward compatibility helpers
-    connection_protocol protocol() const { return net.protocol; }
-    std::string host() const { return net.host; }
-    std::string port() const { return net.port; }
-    bool connected() const { return net.connected; }
-    uint32_t session_id() const { return session.session_id; }
-    uint32_t member_id() const { return session.member_id; }
-    bool is_host() const { return session.is_host; }
-    bool in_session() const { return session.in_session; }
 };
 
 #endif

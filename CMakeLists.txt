@@ -49,6 +49,11 @@ add_executable(engine
     common/tcp/tcpSocket.h
     common/websocket/websocket.cpp
     common/websocket/websocket.h
+    common/udp/udpSocket.h
+    common/udp/udpSocket.cpp
+    common/udp/udpDiscovery.h
+    common/udp/udpDiscovery.cpp
+    common/network_constants.h
     common/results.h
 )
 
@@ -60,6 +65,11 @@ add_executable(server
     common/webSocket/webSocket.cpp
     common/tcp/tcpSocket.h
     common/tcp/tcpSocket.cpp
+    common/udp/udpSocket.h
+    common/udp/udpSocket.cpp
+    common/udp/udpDiscovery.h
+    common/udp/udpDiscovery.cpp
+    common/network_constants.h
     common/protocol/message.h
     common/protocol/message.cpp
     common/results.h

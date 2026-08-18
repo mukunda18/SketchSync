@@ -12,6 +12,7 @@
 #include "common/tcp/tcpSocket.h"
 #include "common/webSocket/webSocketServer.h"
 #include "common/webSocket/webSocket.h"
+#include "common/udp/udpDiscovery.h"
 #include "server/session/clientConnection.h"
 #include "server/session/session.h"
 
@@ -29,7 +30,7 @@ struct client_thread
 
 struct server
 {
-    server(net::io_context& io, unsigned short webSocket_port, unsigned short tcp_server_port);
+    server(net::io_context& io, unsigned short webSocket_port, unsigned short tcp_server_port, unsigned short udp_discovery_port = udp_discovery::DEFAULT_UDP_PORT);
 
     server(const server&) = delete;
     server& operator=(const server&) = delete;
@@ -82,8 +83,11 @@ private:
                                       uint32_t exclude_member_id = 0);
 
     net::io_context& io_;
+    unsigned short tcp_port_;
+    unsigned short udp_port_;
     tcpServer tcp_server;
     webSocketServer webSocket_server;
+    udp_discovery::responder udp_responder;
 
     std::atomic<bool> accept_stop_flag{false};
     std::thread tcp_accept_thread;

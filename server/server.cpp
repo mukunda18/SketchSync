@@ -5,10 +5,21 @@
 server::server(
     net::io_context& io,
     const unsigned short webSocket_port,
-    const unsigned short tcp_server_port)
+    const unsigned short tcp_server_port,
+    const unsigned short udp_discovery_port)
     : io_(io),
+      tcp_port_(tcp_server_port),
+      udp_port_(udp_discovery_port),
       tcp_server(io, tcp_server_port),
-      webSocket_server(io, webSocket_port)
+      webSocket_server(io, webSocket_port),
+      udp_responder(io, udp_discovery_port, [this](const uint32_t session_id) -> std::optional<uint16_t> {
+          std::lock_guard lock(sessions_mutex);
+          const auto it = sessions.find(session_id);
+          if (it != sessions.end() && it->second.state == session_state::open) {
+              return tcp_port_;
+          }
+          return std::nullopt;
+      })
 {
 }
 
@@ -21,11 +32,13 @@ void server::run()
 {
     tcp_accept_thread = std::thread(&server::run_tcp_accept_loop, this);
     ws_accept_thread = std::thread(&server::run_ws_accept_loop, this);
+    udp_responder.start();
 }
 
 void server::shutdown()
 {
     accept_stop_flag.store(true);
+    udp_responder.stop();
     tcp_server.close();
     webSocket_server.close();
 

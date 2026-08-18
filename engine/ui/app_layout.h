@@ -41,7 +41,7 @@ namespace ui {
         std::vector<ColorSwatch> color_swatches;
         std::vector<Button> thickness_buttons;
 
-        void update_layout(float window_width, float window_height);
+        void update_layout(float window_width, float window_height, connection_protocol protocol = connection_protocol::tcp);
         void draw(const network_session_state& net, const std::string& status, const std::string& current_file, bool server_running) const;
     };
 }

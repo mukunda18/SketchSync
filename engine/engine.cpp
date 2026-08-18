@@ -19,6 +19,7 @@
 #include "engine/persistence/persistenceWriter.h"
 #include "engine/ui/file_dialog.h"
 #include "engine/ui/ui.h"
+#include "common/network_constants.h"
 
 sketch_app::sketch_app() : layout()
 {
@@ -82,52 +83,82 @@ void sketch_app::open_and_load()
 
 void sketch_app::join_session()
 {
-    std::lock_guard lock(net_mutex);
-    if (!session_client || !net_state.net.connected)
-    {
-        set_status("Connect to a server first");
-        return;
-    }
-
     uint32_t session_id = 0;
-    const auto [ptr, ec] = std::from_chars(net_state.session.session_id_input.data(),
-                                           net_state.session.session_id_input.data() + net_state.session.session_id_input.size(),
-                                           session_id);
-    if (ec != std::errc{} || session_id == 0)
     {
-        set_status("Invalid session ID");
-        return;
+        std::lock_guard lock(net_mutex);
+        const auto [ptr, ec] = std::from_chars(net_state.session.session_id_input.data(),
+                                               net_state.session.session_id_input.data() + net_state.session.session_id_input.size(),
+                                               session_id);
+        if (ec != std::errc{} || session_id == 0)
+        {
+            set_status("Invalid session ID");
+            return;
+        }
+
+        if (net_state.session.in_session)
+        {
+            set_status("Already in a session. Leave current session first.");
+            return;
+        }
+
+        if (net_state.net.connected && session_client)
+        {
+            if (const auto res = session_client->send_join(session_id, "SketchSync"); !res)
+            {
+                set_status(res.message);
+            }
+            else
+            {
+                net_state.session_state = session_joining_state::joining;
+                net_state.session.session_id = session_id;
+                set_status("Joining session #" + std::to_string(session_id) + "...");
+            }
+            return;
+        }
     }
 
-    if (const auto res = session_client->send_join(session_id, "SketchSync"); !res)
+    if (net_state.net.protocol == connection_protocol::tcp)
     {
-        set_status(res.message);
+        async_tcp_discover_and_join(session_id);
     }
     else
     {
-        net_state.session_state = session_joining_state::joining;
-        net_state.session.session_id = session_id;
-        set_status("Joining session...");
+        async_ws_connect_and_join(session_id);
     }
 }
 
 void sketch_app::create_session()
 {
-    std::lock_guard lock(net_mutex);
-    if (!session_client || !net_state.net.connected)
     {
-        set_status("Connect to a server first");
-        return;
+        std::lock_guard lock(net_mutex);
+        if (net_state.session.in_session)
+        {
+            set_status("Already in a session. Leave current session first.");
+            return;
+        }
+
+        if (net_state.net.connected && session_client)
+        {
+            if (const auto res = session_client->send_create("SketchSync"); !res)
+            {
+                set_status(res.message);
+            }
+            else
+            {
+                net_state.session_state = session_joining_state::creating;
+                set_status("Creating session...");
+            }
+            return;
+        }
     }
 
-    if (const auto res = session_client->send_create("SketchSync"); !res)
+    if (net_state.net.protocol == connection_protocol::websocket)
     {
-        set_status(res.message);
+        async_ws_connect_and_create();
     }
     else
     {
-        net_state.session_state = session_joining_state::creating;
-        set_status("Creating session...");
+        set_status("Start Local server to host locally, or Join a session");
     }
 }
 
@@ -363,6 +394,198 @@ void sketch_app::async_connect_to_server()
     });
 }
 
+void sketch_app::async_tcp_discover_and_join(const uint32_t session_id)
+{
+    if (connecting.exchange(true))
+        return;
+
+    stop_poll.store(false);
+    stop_connect_thread();
+    set_status("Discovering host for session #" + std::to_string(session_id) + " via UDP...");
+    {
+        std::lock_guard lock(net_mutex);
+        net_state.state = connection_state::connecting;
+        net_state.session_state = session_joining_state::joining;
+        net_state.session.session_id = session_id;
+    }
+
+    connect_thread = std::thread([this, session_id]() {
+        struct Guard {
+            sketch_app* app;
+            ~Guard() {
+                app->connecting.store(false);
+                std::lock_guard lock(app->net_mutex);
+                if (!app->net_state.net.connected) {
+                    app->net_state.state = connection_state::disconnected;
+                    app->net_state.session_state = session_joining_state::none;
+                }
+            }
+        } guard{this};
+
+        try {
+            const auto disc = udp_discovery::discover_host(session_id, std::chrono::milliseconds(3000));
+            if (!disc)
+            {
+                if (!stop_poll.load())
+                    set_status("UDP Discovery failed: " + disc.message);
+                return;
+            }
+
+            const auto& [host_ip, tcp_port] = disc.value;
+            {
+                std::lock_guard lock(net_mutex);
+                net_state.net.host = host_ip;
+                net_state.net.port = std::to_string(tcp_port);
+                net_state.net.protocol = connection_protocol::tcp;
+            }
+
+            if (!stop_poll.load())
+                set_status("Found host at " + host_ip + ":" + std::to_string(tcp_port) + ", connecting...");
+
+            const auto res = connect_to_server();
+            if (!res)
+            {
+                if (!stop_poll.load())
+                    set_status("TCP connection failed: " + res.message);
+                return;
+            }
+
+            if (!stop_poll.load())
+                set_status("Joining session #" + std::to_string(session_id) + "...");
+
+            if (session_client)
+            {
+                const auto join_res = session_client->send_join(session_id, "SketchSync");
+                if (!join_res && !stop_poll.load())
+                {
+                    set_status("Join request failed: " + join_res.message);
+                }
+            }
+        }
+        catch (const std::exception& ex) {
+            if (!stop_poll.load()) set_status("Discovery error: " + std::string(ex.what()));
+        }
+        catch (...) {
+            if (!stop_poll.load()) set_status("Discovery error");
+        }
+    });
+}
+
+void sketch_app::async_ws_connect_and_join(const uint32_t session_id)
+{
+    if (connecting.exchange(true))
+        return;
+
+    stop_poll.store(false);
+    stop_connect_thread();
+    set_status("Connecting to WebSocket server...");
+    {
+        std::lock_guard lock(net_mutex);
+        net_state.state = connection_state::connecting;
+        net_state.session_state = session_joining_state::joining;
+        net_state.session.session_id = session_id;
+    }
+
+    connect_thread = std::thread([this, session_id]() {
+        struct Guard {
+            sketch_app* app;
+            ~Guard() {
+                app->connecting.store(false);
+                std::lock_guard lock(app->net_mutex);
+                if (!app->net_state.net.connected) {
+                    app->net_state.state = connection_state::disconnected;
+                    app->net_state.session_state = session_joining_state::none;
+                }
+            }
+        } guard{this};
+
+        try {
+            const auto res = connect_to_server();
+            if (!res)
+            {
+                if (!stop_poll.load())
+                    set_status("WebSocket connection failed: " + res.message);
+                return;
+            }
+
+            if (!stop_poll.load())
+                set_status("Joining session #" + std::to_string(session_id) + "...");
+
+            if (session_client)
+            {
+                const auto join_res = session_client->send_join(session_id, "SketchSync");
+                if (!join_res && !stop_poll.load())
+                {
+                    set_status("Join request failed: " + join_res.message);
+                }
+            }
+        }
+        catch (const std::exception& ex) {
+            if (!stop_poll.load()) set_status("Connection error: " + std::string(ex.what()));
+        }
+        catch (...) {
+            if (!stop_poll.load()) set_status("Connection error");
+        }
+    });
+}
+
+void sketch_app::async_ws_connect_and_create()
+{
+    if (connecting.exchange(true))
+        return;
+
+    stop_poll.store(false);
+    stop_connect_thread();
+    set_status("Connecting to WebSocket server...");
+    {
+        std::lock_guard lock(net_mutex);
+        net_state.state = connection_state::connecting;
+        net_state.session_state = session_joining_state::creating;
+    }
+
+    connect_thread = std::thread([this]() {
+        struct Guard {
+            sketch_app* app;
+            ~Guard() {
+                app->connecting.store(false);
+                std::lock_guard lock(app->net_mutex);
+                if (!app->net_state.net.connected) {
+                    app->net_state.state = connection_state::disconnected;
+                    app->net_state.session_state = session_joining_state::none;
+                }
+            }
+        } guard{this};
+
+        try {
+            const auto res = connect_to_server();
+            if (!res)
+            {
+                if (!stop_poll.load())
+                    set_status("WebSocket connection failed: " + res.message);
+                return;
+            }
+
+            if (!stop_poll.load())
+                set_status("Creating session...");
+
+            if (session_client)
+            {
+                const auto create_res = session_client->send_create("SketchSync");
+                if (!create_res && !stop_poll.load())
+                {
+                    set_status("Create request failed: " + create_res.message);
+                }
+            }
+        }
+        catch (const std::exception& ex) {
+            if (!stop_poll.load()) set_status("Connection error: " + std::string(ex.what()));
+        }
+        catch (...) {
+            if (!stop_poll.load()) set_status("Connection error");
+        }
+    });
+}
+
 void sketch_app::async_start_local_server()
 {
     if (connecting.exchange(true))
@@ -415,23 +638,23 @@ result<bool> sketch_app::start_local_server()
         proto = net_state.net.protocol;
     }
 
-    std::string tcp_p = "9000";
-    std::string ws_p = "8080";
+    std::string tcp_p = std::string(net_config::DEFAULT_TCP_PORT_STR);
+    std::string ws_p = std::string(net_config::DEFAULT_WS_PORT_STR);
     try {
         const int p = std::stoi(port);
         if (proto == connection_protocol::tcp) {
             tcp_p = port;
-            ws_p = std::to_string(p == 8080 ? 8081 : 8080);
+            ws_p = std::to_string(p == net_config::DEFAULT_WS_PORT ? net_config::DEFAULT_WS_PORT + 1 : net_config::DEFAULT_WS_PORT);
         } else {
             ws_p = port;
-            tcp_p = std::to_string(p == 9000 ? 9001 : 9000);
+            tcp_p = std::to_string(p == net_config::DEFAULT_TCP_PORT ? net_config::DEFAULT_TCP_PORT + 1 : net_config::DEFAULT_TCP_PORT);
         }
     } catch (...) {
-        tcp_p = "9000";
-        ws_p = "8080";
+        tcp_p = std::string(net_config::DEFAULT_TCP_PORT_STR);
+        ws_p = std::string(net_config::DEFAULT_WS_PORT_STR);
     }
 
-    if (auto res = local_server.start({.executable = server_exe, .arguments = {"--tcp-port", tcp_p, "--ws-port", ws_p}}); !res) return res;
+    if (auto res = local_server.start({.executable = server_exe, .arguments = {"--tcp-port", tcp_p, "--ws-port", ws_p, "--udp-port", std::to_string(net_config::DEFAULT_UDP_PORT)}}); !res) return res;
 
     result<bool> conn;
     for (int i = 0; i < 15; ++i)
@@ -580,18 +803,54 @@ int sketch_app::run()
     while (!WindowShouldClose())
     {
         const auto ww = static_cast<float>(GetScreenWidth()), wh = static_cast<float>(GetScreenHeight());
-        layout.update_layout(ww, wh);
+        connection_protocol current_proto;
+        bool is_connected, is_running;
+        {
+            std::lock_guard lock(net_mutex);
+            current_proto = net_state.net.protocol;
+            is_connected = net_state.net.connected;
+            is_running = local_server.running();
+        }
+
+        layout.update_layout(ww, wh, current_proto);
 
         // UI Logic Updates
         if (layout.open_btn.update()) open_and_load();
         if (layout.clear_btn.update()) clear_canvas();
 
-        bool is_connected, is_running;
-        { std::lock_guard lock(net_mutex); is_connected = net_state.net.connected; is_running = local_server.running(); }
+        if (layout.connect_btn.update()) {
+            if (is_connected) {
+                disconnect();
+            } else if (current_proto == connection_protocol::websocket) {
+                async_connect_to_server();
+            } else {
+                set_status("Enter Session ID and click Join to discover host, or click Start Local");
+            }
+        }
 
-        if (layout.connect_btn.update()) { if (is_connected) disconnect(); else async_connect_to_server(); }
-        if (layout.local_server_btn.update()) { if (is_running) stop_local_server(); else async_start_local_server(); }
-        if (layout.protocol_toggle.update()) { std::lock_guard lock(net_mutex); net_state.net.protocol = (net_state.net.protocol == connection_protocol::tcp) ? connection_protocol::websocket : connection_protocol::tcp; }
+        if (layout.local_server_btn.update()) {
+            if (is_running) stop_local_server();
+            else async_start_local_server();
+        }
+
+        if (layout.protocol_toggle.update()) {
+            std::lock_guard lock(net_mutex);
+            if (!net_state.net.connected && !connecting.load()) {
+                if (net_state.net.protocol == connection_protocol::tcp) {
+                    net_state.net.protocol = connection_protocol::websocket;
+                    if (net_state.net.port == net_config::DEFAULT_TCP_PORT_STR) {
+                        net_state.net.port = std::string(net_config::DEFAULT_WS_PORT_STR);
+                    }
+                } else {
+                    net_state.net.protocol = connection_protocol::tcp;
+                    if (net_state.net.port == net_config::DEFAULT_WS_PORT_STR) {
+                        net_state.net.port = std::string(net_config::DEFAULT_TCP_PORT_STR);
+                    }
+                }
+            } else {
+                set_status("Disconnect before switching protocol");
+            }
+        }
 
         if (!net_state.session.in_session) {
             if (layout.join_btn.update()) join_session();
@@ -600,8 +859,10 @@ int sketch_app::run()
             if (layout.leave_btn.update()) leave_session();
         }
 
-        layout.host_field.update();
-        layout.port_field.update();
+        if (current_proto == connection_protocol::websocket) {
+            layout.host_field.update();
+            layout.port_field.update();
+        }
         layout.session_id_field.update();
 
         for (auto& tb : layout.tool_buttons) {

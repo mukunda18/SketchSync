@@ -1,4 +1,5 @@
 #include "server/server.h"
+#include "common/network_constants.h"
 #include <boost/asio/io_context.hpp>
 #include <chrono>
 #include <iostream>
@@ -30,8 +31,9 @@ int main(int argc, char* argv[])
 {
     try
     {
-        unsigned short ws_port = 8080;
-        unsigned short tcp_port = 9000;
+        unsigned short ws_port = net_config::DEFAULT_WS_PORT;
+        unsigned short tcp_port = net_config::DEFAULT_TCP_PORT;
+        unsigned short udp_port = net_config::DEFAULT_UDP_PORT;
 
         for (int i = 1; i < argc; ++i)
         {
@@ -39,10 +41,12 @@ int main(int argc, char* argv[])
                 ws_port = parse_port(argv[++i], ws_port);
             else if (arg == "--tcp-port" && i + 1 < argc)
                 tcp_port = parse_port(argv[++i], tcp_port);
+            else if (arg == "--udp-port" && i + 1 < argc)
+                udp_port = parse_port(argv[++i], udp_port);
         }
 
         net::io_context io;
-        server srv(io, ws_port, tcp_port);
+        server srv(io, ws_port, tcp_port, udp_port);
         srv.run();
 
         std::cout << "SketchSync server started.\n";
