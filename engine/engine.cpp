@@ -779,6 +779,82 @@ void sketch_app::stop_local_server() {
     set_status("Local server stopped");
 }
 
+// Maps a canvas_point (0-65535 normalized) to screen coords inside canvas_rect
+static Vector2 canvas_to_screen(const canvas_point p, const Rectangle& r)
+{
+    return Vector2{
+        .x = r.x + (static_cast<float>(p.x) / 65535.0f) * r.width,
+        .y = r.y + (static_cast<float>(p.y) / 65535.0f) * r.height
+    };
+}
+
+// Draws the active in-progress stroke as a GPU overlay — no pixel buffer touched.
+// Shape tools (rect, ellipse, line) are rendered here; freehand/brush/eraser go
+// through copy_pixels_with_preview as before (incremental, already fast).
+static bool draw_stroke_preview(const draw_operation& op, const Rectangle& canvas_rect)
+{
+    if (op.points.size() < 2) return false;
+
+    const Vector2 p0 = canvas_to_screen(op.points.front(), canvas_rect);
+    const Vector2 p1 = canvas_to_screen(op.points.back(),  canvas_rect);
+    const Color   c  = ui::argb_to_color(op.color);
+
+    // Thickness maps to screen pixels proportionally; minimum 1 px.
+    const float thickness = std::max(1.0f,
+        static_cast<float>(op.thickness) * canvas_rect.width / static_cast<float>(1280));
+
+    switch (op.tool)
+    {
+    case tool_type::line:
+        DrawLineEx(p0, p1, thickness, c);
+        return true;
+
+    case tool_type::rect:
+    {
+        const float x = std::min(p0.x, p1.x);
+        const float y = std::min(p0.y, p1.y);
+        const float w = std::abs(p1.x - p0.x);
+        const float h = std::abs(p1.y - p0.y);
+        DrawRectangleLinesEx({x, y, w, h}, thickness, c);
+        return true;
+    }
+
+    case tool_type::filled_rect:
+    {
+        const float x = std::min(p0.x, p1.x);
+        const float y = std::min(p0.y, p1.y);
+        const float w = std::abs(p1.x - p0.x);
+        const float h = std::abs(p1.y - p0.y);
+        DrawRectangleRec({x, y, w, h}, c);
+        return true;
+    }
+
+    case tool_type::ellipse:
+    {
+        const float cx = (p0.x + p1.x) * 0.5f;
+        const float cy = (p0.y + p1.y) * 0.5f;
+        const float rx = std::max(1.0f, std::abs(p1.x - p0.x) * 0.5f);
+        const float ry = std::max(1.0f, std::abs(p1.y - p0.y) * 0.5f);
+        DrawEllipseLines(static_cast<int>(cx), static_cast<int>(cy),
+                         rx, ry, c);
+        return true;
+    }
+
+    case tool_type::filled_ellipse:
+    {
+        const float cx = (p0.x + p1.x) * 0.5f;
+        const float cy = (p0.y + p1.y) * 0.5f;
+        const float rx = std::max(1.0f, std::abs(p1.x - p0.x) * 0.5f);
+        const float ry = std::max(1.0f, std::abs(p1.y - p0.y) * 0.5f);
+        DrawEllipse(static_cast<int>(cx), static_cast<int>(cy), rx, ry, c);
+        return true;
+    }
+
+    default:
+        return false; // freehand/brush/eraser handled by caller
+    }
+}
+
 int sketch_app::run()
 {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
@@ -892,15 +968,33 @@ int sketch_app::run()
             const Vector2 mouse = GetMousePosition();
             process_canvas_input({.inside = CheckCollisionPointRec(mouse, canvas_rect), .pressed = IsMouseButtonPressed(MOUSE_LEFT_BUTTON), .down = IsMouseButtonDown(MOUSE_LEFT_BUTTON), .released = IsMouseButtonReleased(MOUSE_LEFT_BUTTON), .position = ui::normalize_point(ui::clamp_to_canvas(mouse, canvas_rect), canvas_rect), .tool = active_tool});
         }
-
         if (dirty.load()) { rebuild_render_texture(); dirty.store(false); }
-        if (active_stroke.has_value()) ui::sync_texture(canvas_texture, surface.copy_pixels_with_preview(*active_stroke), upload_buffer);
+        if (active_stroke.has_value())
+        {
+            const tool_type t = active_stroke->tool;
+            const bool is_pixel_tool = (t == tool_type::freehand ||
+                                        t == tool_type::brush    ||
+                                        t == tool_type::eraser);
+            if (is_pixel_tool)
+                ui::sync_texture(canvas_texture,
+                                 surface.copy_pixels_with_preview(*active_stroke),
+                                 upload_buffer);
+        }
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
         layout.draw(net_state, get_status(), current_file, is_running);
 
-        DrawTexturePro(canvas_texture, {.x = 0,.y = 0,.width = static_cast<float>(canvas_texture.width), .height = static_cast<float>(canvas_texture.height)}, canvas_rect, {.x = 0,.y = 0}, 0, WHITE);
+        // Draw the committed canvas texture.
+        DrawTexturePro(canvas_texture,
+            {.x = 0, .y = 0,
+             .width  = static_cast<float>(canvas_texture.width),
+             .height = static_cast<float>(canvas_texture.height)},
+            canvas_rect, {.x = 0, .y = 0}, 0, WHITE);
+
+        if (active_stroke.has_value())
+            draw_stroke_preview(*active_stroke, canvas_rect);
+
         DrawRectangleLinesEx(canvas_rect, 1, DARKGRAY);
         EndDrawing();
     }
