@@ -33,6 +33,10 @@ add_executable(engine
     engine/persistence/persistenceWriter.h
     engine/ui/ui.cpp
     engine/ui/ui.h
+    engine/ui/components.cpp
+    engine/ui/components.h
+    engine/ui/app_layout.cpp
+    engine/ui/app_layout.h
     engine/ui/file_dialog.cpp
     engine/ui/file_dialog.h
     engine/canvas/canvas.cpp

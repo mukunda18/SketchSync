@@ -29,8 +29,8 @@ struct tcpSocket
 
     ~tcpSocket();
 
-    result<bool> connect();
-    result<bool> connect(tcp_addr address);
+    result<bool> connect(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
+    result<bool> connect(tcp_addr address, std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
 
     result<size_t> send(std::span<const uint8_t> data);
     result<std::vector<uint8_t>> receive(size_t length);
@@ -40,6 +40,7 @@ struct tcpSocket
     [[nodiscard]] bool is_open() const noexcept;
 
 private:
+    net::io_context& context_;
     tcp_addr address_;
     tcp::resolver resolver_;
     net::ip::tcp::socket socket_;

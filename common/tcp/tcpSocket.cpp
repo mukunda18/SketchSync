@@ -6,16 +6,19 @@
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
+#include <chrono>
+#include <boost/asio/async_result.hpp>
+
 tcpSocket::tcpSocket(net::io_context& context)
-    : resolver_(context), socket_(context)
+    : context_(context), resolver_(context), socket_(context)
 {}
 
 tcpSocket::tcpSocket(tcp_addr address, net::io_context& context)
-    : address_(std::move(address)), resolver_(context), socket_(context)
+    : context_(context), address_(std::move(address)), resolver_(context), socket_(context)
 {}
 
 tcpSocket::tcpSocket(tcp::socket socket, net::io_context& context)
-    : resolver_(context), socket_(std::move(socket))
+    : context_(context), resolver_(context), socket_(std::move(socket))
 {
     connected_ = socket_.is_open();
 }
@@ -25,26 +28,47 @@ tcpSocket::~tcpSocket()
     if (connected_) close();
 }
 
-result<bool> tcpSocket::connect(tcp_addr address)
+result<bool> tcpSocket::connect(tcp_addr address, std::chrono::milliseconds timeout)
 {
     address_ = std::move(address);
-    return connect();
+    return connect(timeout);
 }
 
-result<bool> tcpSocket::connect()
+result<bool> tcpSocket::connect(std::chrono::milliseconds timeout)
 {
-    boost::system::error_code ec;
+    try
+    {
+        boost::system::error_code ec;
 
-    const auto results = resolver_.resolve(address_.host, address_.port, ec);
-    if (ec)
-        return {.value = false, .err = error::resolve_failed, .message = ec.message()};
+        const auto results = resolver_.resolve(address_.host, address_.port, ec);
+        if (ec)
+            return {.value = false, .err = error::resolve_failed, .message = ec.message()};
 
-    net::connect(socket_, results, ec);
-    if (ec)
-        return {.value = false, .err = error::connect_failed, .message = ec.message()};
+        bool connect_success = false;
+        boost::system::error_code connect_ec;
 
-    connected_ = true;
-    return {.value = true, .err = error::none, .message = {}};
+        net::async_connect(socket_, results, [&](const boost::system::error_code& error, const tcp::endpoint&) {
+            connect_ec = error;
+            if (!error) connect_success = true;
+        });
+
+        context_.restart();
+        context_.run_for(timeout);
+
+        if (!connect_success)
+        {
+            socket_.close(ec);
+            std::string msg = connect_ec ? connect_ec.message() : "Connection timed out";
+            return {.value = false, .err = error::connect_failed, .message = std::move(msg)};
+        }
+
+        connected_ = true;
+        return {.value = true, .err = error::none, .message = {}};
+    }
+    catch (const std::exception& ex)
+    {
+        return {.value = false, .err = error::connect_failed, .message = ex.what()};
+    }
 }
 
 result<size_t> tcpSocket::send(const std::span<const uint8_t> data)
@@ -121,21 +145,13 @@ result<std::vector<uint8_t>> tcpSocket::receive(const size_t length)
 
 result<bool> tcpSocket::close()
 {
-    if (!connected_)
-        return {.value = true, .err = error::none, .message = {}};
-
     boost::system::error_code ec;
-
-    ec = socket_.shutdown(tcp::socket::shutdown_both, ec);
-    if (ec)
-        return {.value = false, .err = error::shutdown_failed, .message = ec.message()};
-
-    ec = socket_.close(ec);
+    if (socket_.is_open())
+    {
+        socket_.shutdown(tcp::socket::shutdown_both, ec);
+        socket_.close(ec);
+    }
     connected_ = false;
-
-    if (ec)
-        return {.value = false, .err = error::close_failed, .message = ec.message()};
-
     return {.value = true, .err = error::none, .message = {}};
 }
 

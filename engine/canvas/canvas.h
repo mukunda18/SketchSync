@@ -51,8 +51,6 @@ struct canvas_input_state
     tool_type tool = tool_type::freehand;
 };
 
-// Keeps a freehand operation temporary while the pointer is down and commits
-// it to the canvas on release. Duplicate pointer positions are ignored.
 std::optional<draw_operation> process_canvas_input(
     canvas& surface,
     std::optional<draw_operation>& temporary,

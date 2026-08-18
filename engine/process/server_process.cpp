@@ -1,8 +1,14 @@
 #include "engine/process/server_process.h"
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
+#ifndef NOGDI
 #define NOGDI
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 server_process::~server_process()
@@ -47,6 +53,16 @@ result<bool> server_process::start(const server_process_launch& launch)
         return {.value = false, .err = error::rejected, .message = "server executable not found"};
 
     std::string command_line = build_command_line(launch.executable, launch.arguments);
+    std::vector<char> cmd_buf(command_line.begin(), command_line.end());
+    cmd_buf.push_back('\0');
+
+    HANDLE job = CreateJobObjectA(nullptr, nullptr);
+    if (job != nullptr)
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info));
+    }
 
     STARTUPINFOA startup_info{};
     startup_info.cb = sizeof(startup_info);
@@ -54,7 +70,7 @@ result<bool> server_process::start(const server_process_launch& launch)
 
     const BOOL created = CreateProcessA(
         launch.executable.string().c_str(),
-        command_line.data(),
+        cmd_buf.data(),
         nullptr,
         nullptr,
         FALSE,
@@ -65,10 +81,19 @@ result<bool> server_process::start(const server_process_launch& launch)
         &process_info);
 
     if (!created)
+    {
+        if (job != nullptr) CloseHandle(job);
         return {.value = false, .err = error::connect_failed, .message = "failed to start server process"};
+    }
+
+    if (job != nullptr)
+    {
+        AssignProcessToJobObject(job, process_info.hProcess);
+    }
 
     process_handle_ = process_info.hProcess;
     thread_handle_ = process_info.hThread;
+    job_handle_ = job;
     running_ = true;
     return {.value = true, .err = error::none, .message = {}};
 }
@@ -87,8 +112,12 @@ result<bool> server_process::stop(const unsigned exit_code)
     if (process_handle_ != nullptr)
         CloseHandle(static_cast<HANDLE>(process_handle_));
 
+    if (job_handle_ != nullptr)
+        CloseHandle(static_cast<HANDLE>(job_handle_));
+
     process_handle_ = nullptr;
     thread_handle_ = nullptr;
+    job_handle_ = nullptr;
     running_ = false;
     return {.value = true, .err = error::none, .message = {}};
 }

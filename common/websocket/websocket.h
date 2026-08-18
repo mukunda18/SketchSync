@@ -36,8 +36,8 @@ struct webSocket
 
     ~webSocket();
 
-    result<bool> connect();
-    result<bool> connect(webaddr address);
+    result<bool> connect(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
+    result<bool> connect(webaddr address, std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
 
     result<size_t> send(std::span<const uint8_t> data);
     result<std::vector<uint8_t>> receive();
@@ -47,6 +47,7 @@ struct webSocket
     [[nodiscard]] bool is_open() const noexcept;
 
 private:
+    net::io_context& context_;
     webaddr address_;
     tcp::resolver resolver_;
     websocket_beast::stream<tcp::socket> ws_;

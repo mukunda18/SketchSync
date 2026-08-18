@@ -20,13 +20,14 @@
 #include "engine/ui/file_dialog.h"
 #include "engine/ui/ui.h"
 
-sketch_app::sketch_app()
+sketch_app::sketch_app() : layout()
 {
     surface.create(ui::WINDOW_WIDTH, ui::WINDOW_HEIGHT - ui::TOP_BAR_HEIGHT, ui::BACKGROUND_COLOR);
 }
 
 sketch_app::~sketch_app()
 {
+    stop_connect_thread();
     stop_local_server();
     if (canvas_texture.id != 0)
         UnloadTexture(canvas_texture);
@@ -41,695 +42,608 @@ void sketch_app::rebuild_render_texture()
 
 std::filesystem::path sketch_app::resolve_server_executable()
 {
-    return std::filesystem::current_path() / "server.exe";
+    auto p1 = std::filesystem::current_path() / "server.exe";
+    if (std::filesystem::exists(p1)) return p1;
+    if (auto p2 = std::filesystem::current_path() / "cmake-build-release" / "server.exe"; std::filesystem::exists(p2)) return p2;
+    if (auto p3 = std::filesystem::current_path() / "cmake-build-debug" / "server.exe"; std::filesystem::exists(p3)) return p3;
+    return p1;
 }
 
 void sketch_app::set_status(std::string value)
-    {
-        std::lock_guard lock(status_mutex);
-        status = std::move(value);
-    }
+{
+    std::lock_guard lock(status_mutex);
+    status = std::move(value);
+}
 
 std::string sketch_app::get_status() const
-    {
-        std::lock_guard lock(status_mutex);
-        return status;
-    }
+{
+    std::lock_guard lock(status_mutex);
+    return status;
+}
 
 void sketch_app::open_and_load()
+{
+    if (const auto path = ui::open_binary_file_dialog(); path.has_value())
     {
-        if (const auto path = ui::open_binary_file_dialog(); path.has_value())
+        current_file = path->string();
+        std::string load_status;
+        if (!ui::load_binary_replay(path.value(), surface, load_status))
+            current_file = "untitled";
+        else
         {
-            current_file = path->string();
-            std::string load_status;
-            if (!ui::load_binary_replay(path.value(), surface, load_status))
-                current_file = "untitled";
-            else
-            {
-                operation_log.reset();
-                operation_log = std::make_unique<persistence_writer>(path->string());
-            }
-            set_status(std::move(load_status));
-            active_stroke.reset();
-            dirty.store(true);
+            operation_log.reset();
+            operation_log = std::make_unique<persistence_writer>(path->string());
         }
+        set_status(std::move(load_status));
+        active_stroke.reset();
+        dirty.store(true);
     }
+}
 
 void sketch_app::join_session()
 {
-    if (session_client)
+    std::lock_guard lock(net_mutex);
+    if (!session_client || !net_state.net.connected)
     {
-        set_status("already connected");
-        return;
-    }
-    if (join_session_id_input.empty())
-    {
-        set_status("Enter a session ID");
+        set_status("Connect to a server first");
         return;
     }
 
     uint32_t session_id = 0;
-    const auto* begin = join_session_id_input.data();
-    const auto* end = begin + join_session_id_input.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, session_id);
-    if (ec != std::errc{} || ptr != end || session_id == 0)
+    const auto [ptr, ec] = std::from_chars(net_state.session.session_id_input.data(),
+                                           net_state.session.session_id_input.data() + net_state.session.session_id_input.size(),
+                                           session_id);
+    if (ec != std::errc{} || session_id == 0)
     {
         set_status("Invalid session ID");
         return;
     }
 
-    if (const auto connect_result = connect_to_server(); !connect_result)
+    if (const auto res = session_client->send_join(session_id, "SketchSync"); !res)
     {
-        set_status(connect_result.message);
+        set_status(res.message);
+    }
+    else
+    {
+        net_state.session_state = session_joining_state::joining;
+        net_state.session.session_id = session_id;
+        set_status("Joining session...");
+    }
+}
+
+void sketch_app::create_session()
+{
+    std::lock_guard lock(net_mutex);
+    if (!session_client || !net_state.net.connected)
+    {
+        set_status("Connect to a server first");
         return;
     }
 
-    if (const auto join_result = session_client->join(session_id, "SketchSync"); !join_result)
+    if (const auto res = session_client->send_create("SketchSync"); !res)
     {
-        set_status(join_result.message);
-        if (tcp_socket && tcp_socket->is_open())
-            tcp_socket->close();
-        session_client.reset();
-        tcp_socket.reset();
-        io_context.reset();
-        return;
+        set_status(res.message);
     }
+    else
+    {
+        net_state.session_state = session_joining_state::creating;
+        set_status("Creating session...");
+    }
+}
 
-    stop_poll.store(false);
-    poll_thread = std::thread(&sketch_app::poll_session, this);
-    set_status("Joined session #" + std::to_string(session_id));
-    dirty.store(true);
+void sketch_app::leave_session()
+{
+    if (session_client && net_state.session.in_session) {
+        if (session_client->is_host()) session_client->send_close_session();
+        else session_client->send_leave();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    handle_leave();
+    set_status("Left session");
+}
+
+void sketch_app::handle_leave()
+{
+    std::lock_guard lock(net_mutex);
+    if (session_client) session_client->mark_session_closed();
+    net_state.session.in_session = false;
+    net_state.session.session_id = 0;
+    net_state.session.member_id = 0;
+    net_state.session.is_host = false;
+    net_state.session_state = session_joining_state::none;
 }
 
 void sketch_app::clear_canvas()
 {
     active_stroke.reset();
-
     const uint32_t member = session_client ? session_client->member_id() : 1;
-    const uint64_t operation_id = (static_cast<uint64_t>(member) << 32) |
-                                  next_operation_number.fetch_add(1);
+    const uint64_t operation_id = (static_cast<uint64_t>(member) << 32) | next_operation_number.fetch_add(1);
     const bool host_owns_canvas = !session_client || session_client->is_host();
 
-    draw_operation clear_operation;
-    clear_operation.operation_id = operation_id;
-    clear_operation.member_id = member;
-    clear_operation.tool = tool_type::clear;
-    clear_operation.color = ui::BACKGROUND_COLOR;
-    clear_operation.thickness = 1;
+    draw_operation clear_op;
+    clear_op.operation_id = operation_id;
+    clear_op.member_id = member;
+    clear_op.tool = tool_type::clear;
+    clear_op.color = 0xFFFFFFFF;
+    clear_op.thickness = 1;
 
-    if (host_owns_canvas)
-    {
-        clear_operation.seq = surface.apply(clear_operation);
-        if (operation_log)
-            operation_log->enqueue(clear_operation);
+    if (host_owns_canvas) {
+        surface.apply(clear_op);
+        if (operation_log) operation_log->enqueue(clear_op);
         rebuild_render_texture();
         dirty.store(true);
     }
 
-    if (session_client && session_client->in_session())
-    {
-        if (!host_owns_canvas)
-        {
+    if (session_client && session_client->in_session()) {
+        if (!host_owns_canvas) {
             std::lock_guard lock(pending_mutex);
-            pending_operations.insert(clear_operation.operation_id);
+            pending_operations.insert(clear_op.operation_id);
         }
-        if (const auto sent = session_client->send_draw(clear_operation); !sent)
-            set_status(sent.message);
-        else
-            set_status(host_owns_canvas ? "Canvas cleared" : "Clear requested");
+        session_client->send_draw(clear_op);
     }
-    else
-        set_status("Canvas cleared");
+    set_status("Canvas cleared");
 }
 
 void sketch_app::process_canvas_input(const canvas_input_state& input)
 {
     const uint32_t member = session_client ? session_client->member_id() : 1;
-    const uint64_t operation_id = (static_cast<uint64_t>(member) << 32) |
-                                  next_operation_number.fetch_add(1);
+    const uint64_t operation_id = (static_cast<uint64_t>(member) << 32) | next_operation_number.fetch_add(1);
     const bool host_owns_canvas = !session_client || session_client->is_host();
-    const auto committed = ::process_canvas_input(
-        surface, active_stroke, input, operation_id, member,
-        active_color, active_thickness, host_owns_canvas, active_tool);
-    if (!committed)
-        return;
+    const auto committed = ::process_canvas_input(surface, active_stroke, input, operation_id, member, active_color, active_thickness, host_owns_canvas, active_tool);
+    if (!committed) return;
 
-    if (host_owns_canvas && operation_log)
-        operation_log->enqueue(*committed);
-    if (host_owns_canvas && operation_log && !operation_log->healthy())
-        set_status("Persistence write failed");
+    if (host_owns_canvas && operation_log) operation_log->enqueue(*committed);
     dirty.store(true);
-    if (session_client && session_client->in_session())
-    {
-        if (!host_owns_canvas)
-        {
+    if (session_client && session_client->in_session()) {
+        if (!host_owns_canvas) {
             std::lock_guard lock(pending_mutex);
             pending_operations.insert(committed->operation_id);
         }
-        if (const auto sent = session_client->send_draw(*committed); !sent)
-            set_status(sent.message);
+        session_client->send_draw(*committed);
     }
 }
 
 void sketch_app::poll_session()
+{
+    while (!stop_poll.load())
     {
-        while (!stop_poll.load())
+        if (!session_client) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); continue; }
+        const auto msg_res = session_client->poll();
+        if (!msg_res) {
+            if (!stop_poll.load()) {
+                set_status(std::string("Disconnected: ") + msg_res.message);
+                handle_leave();
+                std::lock_guard lock(net_mutex);
+                net_state.net.connected = false;
+                net_state.state = connection_state::disconnected;
+            }
+            break;
+        }
+
+        switch (const auto& msg = msg_res.value; msg.header.opcode)
         {
-            if (!session_client)
-                break;
-
-            const auto msg_res = session_client->poll();
-            if (!msg_res)
-            {
-                if (!stop_poll.load())
-                    set_status(msg_res.message);
-                break;
+        case Opcode::NOTIFICATION: handle_notification(msg.payload); break;
+        case Opcode::DRAW: handle_draw(msg.payload); break;
+        case Opcode::CANVAS_STATE: handle_canvas_state(msg.payload); break;
+        case Opcode::ACK: handle_ack(msg); break;
+        case Opcode::ERROR_MSG: handle_error(msg.payload); break;
+        case Opcode::CANVAS_STATE_REQUEST:
+            if (session_client && session_client->is_host()) {
+                session_client->send_canvas_state(surface.snapshot());
             }
-
-            const auto& [header, payload] = msg_res.value;
-            switch (header.opcode)
-            {
-            case Opcode::NOTIFICATION:
-                {
-                    if (!payload.empty())
-                    {
-                        switch (payload[0])
-                        {
-                        case notifcode::MEMBER_JOINED:
-                            set_status("A member joined");
-                            break;
-                        case notifcode::MEMBER_LEFT:
-                            set_status("A member left");
-                            break;
-                        case notifcode::SESSION_CLOSED:
-                            session_client->mark_session_closed();
-                            set_status("Session closed");
-                            stop_poll.store(true);
-                            break;
-                        default:
-                            break;
-                        }
-                    }
-                    break;
-                }
-            case Opcode::DRAW:
-                {
-            const auto op_res = parseDrawOperation(payload);
-                    if (!op_res)
-                    {
-                        set_status(op_res.message);
-                        break;
-                    }
-
-                    draw_operation op = op_res.value;
-                    {
-                        std::lock_guard lock(pending_mutex);
-                        pending_operations.erase(op.operation_id);
-                    }
-                    if (session_client->is_host())
-                    {
-                        if (const auto validation = validateDrawOperation(op, false); !validation)
-                        {
-                            set_status(validation.message);
-                            break;
-                        }
-                        if (op.operation_id != 0 && surface.contains_operation(op.operation_id))
-                            break;
-                        op.seq = surface.apply(op);
-                        if (operation_log)
-                            operation_log->enqueue(op);
-                        if (operation_log && !operation_log->healthy())
-                            set_status("Persistence write failed");
-
-                        if (const auto send_result = session_client->send_draw_raw(op); !send_result)
-                            set_status(send_result.message);
-                    }
-                    else
-                    {
-                        if (op.seq == 0)
-                        {
-                            set_status("received uncommitted operation");
-                            break;
-                        }
-
-                        const uint32_t expected = surface.next_sequence();
-                        if (op.seq > expected)
-                        {
-                            if (const auto request = session_client->request_canvas_state(); !request)
-                                set_status(request.message);
-                            else
-                                set_status("Canvas sync required");
-                            break;
-                        }
-                        if (op.seq < expected)
-                            break;
-
-                        op.seq = surface.apply(op);
-                    }
-
-                    dirty.store(true);
-                    break;
-                }
-            case Opcode::CANVAS_STATE:
-                {
-                    auto state_res = parseCanvasStateMessage(payload);
-                    if (!state_res)
-                    {
-                        set_status(state_res.message);
-                        break;
-                    }
-
-                    surface.load(state_res.value.operations);
-                    dirty.store(true);
-                    break;
-                }
-            case Opcode::CANVAS_STATE_REQUEST:
-                {
-                    if (session_client->is_host())
-                    {
-                        if (const auto send_result = session_client->send_canvas_state(surface.snapshot()); !send_result)
-                            set_status(send_result.message);
-                    }
-                    break;
-                }
-            default:
-                set_status("unexpected message opcode");
-                break;
-            }
+            break;
+        default: break;
         }
     }
+}
+
+void sketch_app::handle_notification(const std::vector<uint8_t>& payload)
+{
+    if (payload.empty()) return;
+    switch (payload[0])
+    {
+    case notifcode::MEMBER_JOINED: set_status("A member joined"); break;
+    case notifcode::MEMBER_LEFT: set_status("A member left"); break;
+    case notifcode::SESSION_CLOSED: handle_leave(); set_status("Session closed by host"); break;
+    default: break;
+    }
+}
+
+void sketch_app::handle_draw(const std::vector<uint8_t>& payload)
+{
+    const auto op_res = parseDrawOperation(payload);
+    if (!op_res) return;
+
+    draw_operation op = op_res.value;
+    { std::lock_guard lock(pending_mutex); pending_operations.erase(op.operation_id); }
+    if (session_client->is_host()) {
+        if (!validateDrawOperation(op, false)) return;
+        if (op.operation_id != 0 && surface.contains_operation(op.operation_id)) return;
+        op.seq = surface.apply(op);
+        if (operation_log) operation_log->enqueue(op);
+        session_client->send_draw_raw(op);
+    } else {
+        if (op.seq == 0) return;
+        const uint32_t expected = surface.next_sequence();
+        if (op.seq > expected) { session_client->request_canvas_state(); return; }
+        if (op.seq < expected) return;
+        op.seq = surface.apply(op);
+    }
+    dirty.store(true);
+}
+
+void sketch_app::handle_canvas_state(const std::vector<uint8_t>& payload)
+{
+    if (const auto state_res = parseCanvasStateMessage(payload)) { surface.load(state_res.value.operations); dirty.store(true); set_status("Canvas synchronized"); }
+}
+
+void sketch_app::handle_ack(const Message& msg)
+{
+    std::unique_lock lock(net_mutex);
+    switch (net_state.session_state)
+    {
+    case session_joining_state::creating: {
+        if (const auto ack = parseCreateAckMessage(msg.payload); ack && ack.value.ack_code == ackcode::CREATE_OK) {
+            session_client->set_session_info(ack.value.member_id, ack.value.session_id, true);
+            net_state.session.member_id = ack.value.member_id; net_state.session.session_id = ack.value.session_id;
+            net_state.session.is_host = true; net_state.session.in_session = true;
+            net_state.session_state = session_joining_state::in_session;
+            set_status("Hosting session #" + std::to_string(ack.value.session_id));
+        }
+        break;
+    }
+    case session_joining_state::joining: {
+        if (const auto ack = parseJoinAckMessage(msg.payload); ack && ack.value.ack_code == ackcode::JOIN_OK) {
+            session_client->set_session_info(ack.value.member_id, net_state.session.session_id, false);
+            net_state.session.member_id = ack.value.member_id; net_state.session.is_host = false;
+            net_state.session.in_session = true; net_state.session_state = session_joining_state::in_session;
+            session_client->request_canvas_state();
+            set_status("Joined session #" + std::to_string(net_state.session.session_id));
+        }
+        break;
+    }
+    case session_joining_state::leaving:
+    case session_joining_state::closing: lock.unlock(); handle_leave(); break;
+    default: break;
+    }
+}
+
+void sketch_app::handle_error(const std::vector<uint8_t>& payload)
+{
+    if (const auto err = parseErrorMessage(payload)) { set_status(err.value.err_message); std::lock_guard lock(net_mutex); net_state.session_state = session_joining_state::none; }
+}
+
+void sketch_app::stop_connect_thread()
+{
+    stop_poll.store(true);
+    if (auto* io = connecting_io.load())
+    {
+        io->stop();
+    }
+    if (connect_thread.joinable())
+    {
+        connect_thread.join();
+    }
+}
+
+void sketch_app::async_connect_to_server()
+{
+    if (connecting.exchange(true))
+        return;
+
+    stop_poll.store(false);
+    stop_connect_thread();
+    set_status("Connecting...");
+    {
+        std::lock_guard lock(net_mutex);
+        net_state.state = connection_state::connecting;
+    }
+
+    connect_thread = std::thread([this]() {
+        struct Guard {
+            sketch_app* app;
+            ~Guard() {
+                app->connecting.store(false);
+                std::lock_guard lock(app->net_mutex);
+                if (!app->net_state.net.connected)
+                    app->net_state.state = connection_state::disconnected;
+            }
+        } guard{this};
+        try {
+            const auto res = connect_to_server();
+            if (!res && !stop_poll.load())
+            {
+                set_status("Connection failed: " + res.message);
+            }
+        } catch (const std::exception& ex) {
+            if (!stop_poll.load()) set_status("Connection error: " + std::string(ex.what()));
+        } catch (...) {
+            if (!stop_poll.load()) set_status("Connection error");
+        }
+    });
+}
+
+void sketch_app::async_start_local_server()
+{
+    if (connecting.exchange(true))
+        return;
+
+    stop_poll.store(false);
+    stop_connect_thread();
+    set_status("Starting local server...");
+    {
+        std::lock_guard lock(net_mutex);
+        net_state.state = connection_state::connecting;
+    }
+
+    connect_thread = std::thread([this]() {
+        struct Guard {
+            sketch_app* app;
+            ~Guard() {
+                app->connecting.store(false);
+                std::lock_guard lock(app->net_mutex);
+                if (!app->net_state.net.connected)
+                    app->net_state.state = connection_state::disconnected;
+            }
+        } guard{this};
+        try {
+            const auto res = start_local_server();
+            if (!res && !stop_poll.load())
+            {
+                set_status("Server start failed: " + res.message);
+            }
+        } catch (const std::exception& ex) {
+            if (!stop_poll.load()) set_status("Server start error: " + std::string(ex.what()));
+        } catch (...) {
+            if (!stop_poll.load()) set_status("Server start error");
+        }
+    });
+}
 
 result<bool> sketch_app::start_local_server()
+{
+    if (local_server.running()) return {.value = false, .err = ::error::rejected, .message = "Already running"};
+    const auto server_exe = resolve_server_executable();
+    if (!std::filesystem::exists(server_exe)) return {.value = false, .err = ::error::rejected, .message = "server.exe not found at " + server_exe.string()};
+
+    stop_poll.store(false);
+    std::string port;
+    connection_protocol proto;
     {
-        if (local_server.running() || session_client)
-            return {.value = false, .err = error::rejected, .message = "server already running"};
-
-        const auto server_exe = resolve_server_executable();
-        if (server_exe.empty() || !std::filesystem::exists(server_exe))
-            return {.value = false, .err = error::rejected, .message = "server executable not found"};
-
-        std::vector<std::string> args;
-        args.emplace_back("--tcp-port");
-        args.emplace_back("9000");
-        args.emplace_back("--ws-port");
-        args.emplace_back("0");
-
-        auto process_result = local_server.start(server_process_launch{
-            .executable = server_exe,
-            .arguments = args
-        });
-        if (!process_result)
-            return process_result;
-
-        if (const auto connect_result = connect_to_server(); !connect_result)
-        {
-            local_server.stop(1);
-            return connect_result;
-        }
-
-        if (const auto create_result = session_client->create("SketchSync"); !create_result)
-        {
-            if (tcp_socket && tcp_socket->is_open())
-                tcp_socket->close();
-            session_client.reset();
-            tcp_socket.reset();
-            io_context.reset();
-            local_server.stop(1);
-            return {.value = false, .err = create_result.err, .message = create_result.message};
-        }
-
-        stop_poll.store(false);
-        poll_thread = std::thread(&sketch_app::poll_session, this);
-        set_status("Hosting session #" + std::to_string(create_result.value));
-        dirty.store(true);
-        return {.value = true, .err = error::none, .message = {}};
+        std::lock_guard lock(net_mutex);
+        port = net_state.net.port;
+        proto = net_state.net.protocol;
     }
 
-result<bool> sketch_app::connect_to_server()
-{
-    if (session_client)
-        return {.value = false, .err = error::rejected, .message = "already connected"};
+    std::string tcp_p = "9000";
+    std::string ws_p = "8080";
+    try {
+        const int p = std::stoi(port);
+        if (proto == connection_protocol::tcp) {
+            tcp_p = port;
+            ws_p = std::to_string(p == 8080 ? 8081 : 8080);
+        } else {
+            ws_p = port;
+            tcp_p = std::to_string(p == 9000 ? 9001 : 9000);
+        }
+    } catch (...) {
+        tcp_p = "9000";
+        ws_p = "8080";
+    }
 
-    io_context = std::make_unique<net::io_context>();
-    tcp_socket.emplace(tcp_addr{.host = "127.0.0.1", .port = "9000"}, *io_context);
+    if (auto res = local_server.start({.executable = server_exe, .arguments = {"--tcp-port", tcp_p, "--ws-port", ws_p}}); !res) return res;
 
-    result connect_result{.value = false, .err = error::connect_failed, .message = "failed to connect to server"};
-    for (int attempt = 0; attempt < 50; ++attempt)
+    result<bool> conn;
+    for (int i = 0; i < 15; ++i)
     {
-        connect_result = tcp_socket->connect();
-        if (connect_result)
-            break;
+        if (stop_poll.load() || !local_server.running()) break;
+        conn = connect_to_server(std::chrono::milliseconds(500));
+        if (conn) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    if (!connect_result)
-    {
-        if (tcp_socket && tcp_socket->is_open())
-            tcp_socket->close();
-        tcp_socket.reset();
-        io_context.reset();
-        return connect_result;
-    }
-
-    session_client = std::make_unique<sessionClient>(*tcp_socket);
-    return {.value = true, .err = error::none, .message = {}};
+    if (!conn) { local_server.stop(1); return conn; }
+    create_session();
+    return {.value = true, .err = error::none};
 }
 
-void sketch_app::stop_local_server()
+result<bool> sketch_app::connect_to_server(const std::chrono::milliseconds timeout)
+{
+    stop_poll.store(false);
     {
-        stop_poll.store(true);
-
-        if (tcp_socket && tcp_socket->is_open())
-            tcp_socket->close();
-
-        if (poll_thread.joinable())
-            poll_thread.join();
-
-        const bool had_local_process = local_server.running();
-        const bool had_session = session_client && session_client->in_session();
-
-        session_client.reset();
-        tcp_socket.reset();
-        io_context.reset();
-        local_server.stop();
-        if (had_local_process)
-            set_status("Local server stopped");
-        else if (had_session)
-            set_status("Disconnected from session");
-        else
-            set_status("Not connected");
-        dirty.store(true);
+        std::lock_guard lock(net_mutex);
+        if (session_client || net_state.net.connected)
+            return {.value = false, .err = ::error::rejected, .message = "Already connected"};
     }
 
-    int sketch_app::run()
+    std::string host;
+    std::string port;
+    connection_protocol proto;
     {
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
-        InitWindow(ui::WINDOW_WIDTH, ui::WINDOW_HEIGHT, "SketchSync");
-        SetWindowMinSize(900, 600);
-        const Image image = GenImageColor(static_cast<int>(surface.width), static_cast<int>(surface.height), WHITE);
-        canvas_texture = LoadTextureFromImage(image);
-        UnloadImage(image);
-        rebuild_render_texture();
-        SetTargetFPS(60);
+        std::lock_guard lock(net_mutex);
+        host = net_state.net.host;
+        port = net_state.net.port;
+        proto = net_state.net.protocol;
+    }
 
-        while (!WindowShouldClose())
-        {
-            const bool minimized = IsWindowMinimized();
-            const float window_width = static_cast<float>(std::max(1, GetScreenWidth()));
-            const float window_height = static_cast<float>(std::max(1, GetScreenHeight()));
-            const float top_bar_height = std::clamp(window_height * 0.075f, 52.0f, 76.0f);
-            const float drawable_width = window_width;
-            const float drawable_height = std::max(1.0f, window_height - top_bar_height);
-            const float max_canvas_width = drawable_width * 0.60f;
-            const float max_canvas_height = drawable_height * 0.80f;
-            const float canvas_aspect = static_cast<float>(surface.width) /
-                                        static_cast<float>(std::max(1u, surface.height));
-            float canvas_width = max_canvas_width;
-            float canvas_height = canvas_width / canvas_aspect;
-            if (canvas_height > max_canvas_height)
-            {
-                canvas_height = max_canvas_height;
-                canvas_width = canvas_height * canvas_aspect;
-            }
-            const Rectangle canvas_rect{
-                .x = (drawable_width - canvas_width) * 0.5f,
-                .y = top_bar_height +
-                     (drawable_height - canvas_height) * 0.5f,
-                .width = canvas_width,
-                .height = canvas_height
-            };
+    auto new_io = std::make_unique<net::io_context>();
+    struct IOCleanup {
+        std::atomic<net::io_context*>& ref;
+        IOCleanup(std::atomic<net::io_context*>& r, net::io_context* ptr) : ref(r) { ref.store(ptr); }
+        ~IOCleanup() { ref.store(nullptr); }
+    } io_cleanup(connecting_io, new_io.get());
+    result<bool> conn_res;
 
-            const Vector2 mouse = GetMousePosition();
-            const float bar_padding = std::max(8.0f, window_width * 0.012f);
-            const float button_gap = std::max(6.0f, window_width * 0.006f);
-            const float button_height = top_bar_height - bar_padding * 2.0f;
-            const float button_y = bar_padding;
-            const float open_width = window_width * 0.085f;
-            const float clear_width = window_width * 0.070f;
-            const float start_width = window_width * 0.105f;
-            const float join_width = window_width * 0.082f;
-            const float stop_width = window_width * 0.085f;
-            const Rectangle open_button{
-                .x = bar_padding, .y = button_y, .width = open_width, .height = button_height};
-            const Rectangle clear_button{
-                .x = open_button.x + open_button.width + button_gap,
-                .y = button_y, .width = clear_width, .height = button_height};
-            const Rectangle start_button{
-                .x = clear_button.x + clear_button.width + button_gap,
-                .y = button_y, .width = start_width, .height = button_height};
-            const Rectangle join_button{
-                .x = start_button.x + start_button.width + button_gap,
-                .y = button_y, .width = join_width, .height = button_height};
-            const Rectangle stop_button{
-                .x = join_button.x + join_button.width + button_gap,
-                .y = button_y, .width = stop_width, .height = button_height};
-            const Rectangle join_input_rect{
-                .x = stop_button.x + stop_button.width + button_gap,
-                .y = button_y,
-                .width = std::min(window_width * 0.14f, std::max(110.0f, window_width * 0.10f)),
-                .height = button_height};
+    std::unique_ptr<tcpSocket> new_tcp;
+    std::unique_ptr<webSocket> new_ws;
 
-            constexpr std::array<std::pair<tool_type, const char*>, 9> tools{{
-                {tool_type::freehand, "Freehand"},
-                {tool_type::brush, "Brush"},
-                {tool_type::line, "Line"},
-                {tool_type::rect, "Rect"},
-                {tool_type::filled_rect, "Fill Rect"},
-                {tool_type::ellipse, "Ellipse"},
-                {tool_type::filled_ellipse, "Fill Ellipse"},
-                {tool_type::eraser, "Eraser"},
-                {tool_type::bucket_fill, "Bucket Fill"}
-            }};
-            const float tool_panel_x = std::max(8.0f, canvas_rect.x * 0.12f);
-            const float tool_width = std::max(90.0f, canvas_rect.x * 0.72f);
-            const float tool_height = std::max(20.0f, std::min(30.0f, canvas_rect.height / 13.0f));
-            const float tool_gap = std::max(3.0f, tool_height * 0.10f);
+    if (proto == connection_protocol::tcp) {
+        new_tcp = std::make_unique<tcpSocket>(tcp_addr{.host = host, .port = port}, *new_io);
+        conn_res = new_tcp->connect(timeout);
+    } else {
+        new_ws = std::make_unique<webSocket>(webaddr{.host = host, .port = port, .path = "/"}, *new_io);
+        conn_res = new_ws->connect(timeout);
+    }
 
-            // Right panel geometry
-            const float right_gap = std::max(8.0f, window_width * 0.006f);
-            const float right_panel_x = canvas_rect.x + canvas_rect.width + right_gap;
-            const float right_panel_width = std::max(100.0f, window_width - right_panel_x - bar_padding);
-            const float right_panel_y = canvas_rect.y;
+    if (!conn_res || stop_poll.load()) { return conn_res; }
 
-            constexpr std::array<uint8_t, 6> thicknesses{1, 2, 4, 8, 16, 24};
-            const float thick_btn_w = (right_panel_width - button_gap) * 0.5f;
-            const float thick_btn_h = std::max(22.0f, thick_btn_w * 0.45f);
-            const float right_thick_start_y = right_panel_y + 18.0f;
-            const float right_color_label_y = right_thick_start_y + 3.0f * (thick_btn_h + button_gap) + 34.0f;
-            const float right_color_start_y = right_color_label_y + 18.0f + button_gap;
+    std::unique_ptr<sessionClient> new_client;
+    if (proto == connection_protocol::tcp)
+        new_client = std::make_unique<sessionClient>(*new_tcp);
+    else
+        new_client = std::make_unique<sessionClient>(*new_ws);
 
-            constexpr std::array<uint32_t, 16> palette{
-                0xFF000000, 0xFF505050, 0xFFAAAAAA, 0xFFFFFFFF,
-                0xFFE53935, 0xFFFF7043, 0xFFFFB300, 0xFF43A047,
-                0xFF00ACC1, 0xFF1E88E5, 0xFF5E35B1, 0xFFE91E63,
-                0xFF795548, 0xFF558B2F, 0xFFFF80AB, 0xFF37474F,
-            };
-            constexpr int color_cols = 4;
-            const float color_swatch = (right_panel_width - static_cast<float>(color_cols - 1) * button_gap)
-                                       / static_cast<float>(color_cols);
+    stop_poll.store(true);
+    if (io_context) io_context->stop();
+    if (tcp_socket) tcp_socket->close();
+    if (ws_socket) ws_socket->close();
+    if (poll_thread.joinable()) {
+        poll_thread.join();
+    }
 
-            if (ui::button_hit(open_button))
-                open_and_load();
+    {
+        std::lock_guard lock(net_mutex);
+        io_context = std::move(new_io);
+        tcp_socket = std::move(new_tcp);
+        ws_socket = std::move(new_ws);
+        session_client = std::move(new_client);
+        net_state.net.connected = true;
+        net_state.state = connection_state::connected;
+    }
 
-            if (ui::button_hit(clear_button))
-                clear_canvas();
+    stop_poll.store(false);
+    poll_thread = std::thread(&sketch_app::poll_session, this);
+    set_status("Connected to " + host);
+    return {.value = true, .err = error::none};
+}
 
-            if (ui::button_hit(start_button))
-            {
-                if (const auto result = start_local_server(); !result)
-                    set_status(result.message);
-            }
+void sketch_app::handle_disconnect()
+{
+    stop_poll.store(true);
+    if (io_context) io_context->stop();
+    if (tcp_socket) tcp_socket->close();
+    if (ws_socket) ws_socket->close();
+    handle_leave();
 
-            if (ui::button_hit(join_button))
-                join_session();
+    std::lock_guard lock(net_mutex);
+    session_client.reset();
+    tcp_socket.reset();
+    ws_socket.reset();
+    io_context.reset();
+    net_state.net.connected = false;
+    net_state.state = connection_state::disconnected;
+}
 
-            if (ui::button_hit(stop_button))
-                stop_local_server();
+void sketch_app::disconnect() {
+    stop_connect_thread();
+    if (session_client && net_state.session.in_session) {
+        if (session_client->is_host()) session_client->send_close_session(); else session_client->send_leave();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    stop_poll.store(true);
+    if (io_context) io_context->stop();
+    if (tcp_socket) tcp_socket->close();
+    if (ws_socket) ws_socket->close();
+    if (poll_thread.joinable()) {
+        poll_thread.join();
+    }
+    handle_disconnect();
+}
 
-            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
-                join_input_active = CheckCollisionPointRec(mouse, join_input_rect);
+void sketch_app::stop_local_server() {
+    disconnect();
+    local_server.stop();
+    set_status("Local server stopped");
+}
 
-            if (join_input_active)
-            {
-                while (const int key = GetCharPressed())
-                {
-                    if (key >= '0' && key <= '9' && join_session_id_input.size() < 10)
-                        join_session_id_input.push_back(static_cast<char>(key));
-                }
-                if (IsKeyPressed(KEY_BACKSPACE) && !join_session_id_input.empty())
-                    join_session_id_input.pop_back();
-                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))
-                    join_session();
-            }
+int sketch_app::run()
+{
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
+    InitWindow(ui::WINDOW_WIDTH, ui::WINDOW_HEIGHT, "SketchSync");
+    SetWindowMinSize(1024, 768);
 
-            for (size_t i = 0; i < tools.size(); ++i)
-            {
-                const Rectangle tool_button{
-                    .x = tool_panel_x,
-                    .y = canvas_rect.y + static_cast<float>(i) * (tool_height + tool_gap),
-                    .width = tool_width,
-                    .height = tool_height};
-                if (ui::button_hit(tool_button))
-                {
-                    active_tool = tools[i].first;
-                    active_stroke.reset();
-                    set_status(std::string("Tool: ") + tools[i].second);
-                }
-            }
-            for (size_t i = 0; i < palette.size(); ++i)
-            {
-                const Rectangle swatch{
-                    .x = right_panel_x + static_cast<float>(i % color_cols) * (color_swatch + button_gap),
-                    .y = right_color_start_y + static_cast<float>(i / color_cols) * (color_swatch + button_gap),
-                    .width = color_swatch,
-                    .height = color_swatch};
-                if (ui::button_hit(swatch))
-                    active_color = palette[i];
-            }
-            for (size_t i = 0; i < thicknesses.size(); ++i)
-            {
-                const Rectangle thick_btn{
-                    .x = right_panel_x + static_cast<float>(i % 2) * (thick_btn_w + button_gap),
-                    .y = right_thick_start_y + static_cast<float>(i / 2) * (thick_btn_h + button_gap),
-                    .width = thick_btn_w,
-                    .height = thick_btn_h};
-                if (ui::button_hit(thick_btn))
-                    active_thickness = thicknesses[i];
-            }
+    ui::default_font = LoadFontEx("../engine/ui/ClarityCity-Black.otf", 64, nullptr, 0);
 
-            if (IsKeyPressed(KEY_O) && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)))
-                open_and_load();
+    if (!IsFontValid(ui::default_font)) {
+        set_status("Warning: ClarityCity-Black.otf not found at ../engine/ui/");
+    }
 
-            if (!minimized)
-                process_canvas_input(canvas_input_state{
-                    .inside = CheckCollisionPointRec(mouse, canvas_rect),
-                    .pressed = IsMouseButtonPressed(MOUSE_LEFT_BUTTON),
-                    .down = IsMouseButtonDown(MOUSE_LEFT_BUTTON),
-                    .released = IsMouseButtonReleased(MOUSE_LEFT_BUTTON),
-                    .position = ui::normalize_point(ui::clamp_to_canvas(mouse, canvas_rect), canvas_rect),
-                    .tool = active_tool
-                });
+    canvas_texture = LoadTextureFromImage(GenImageColor(static_cast<int>(surface.width),static_cast<int>(surface.height), WHITE));
+    rebuild_render_texture();
+    SetTargetFPS(60);
 
-            if (dirty.load())
-            {
-                rebuild_render_texture();
-                dirty.store(false);
-            }
+    // Binding text fields
+    layout.host_field.value = &net_state.net.host;
+    layout.port_field.value = &net_state.net.port;
+    layout.session_id_field.value = &net_state.session.session_id_input;
 
-            if (active_stroke.has_value())
-                ui::sync_texture(canvas_texture,
-                                 surface.copy_pixels_with_preview(*active_stroke), upload_buffer);
+    while (!WindowShouldClose())
+    {
+        const auto ww = static_cast<float>(GetScreenWidth()), wh = static_cast<float>(GetScreenHeight());
+        layout.update_layout(ww, wh);
 
-            BeginDrawing();
-            ClearBackground(Color{.r = 240, .g = 242, .b = 246, .a = 255});
+        // UI Logic Updates
+        if (layout.open_btn.update()) open_and_load();
+        if (layout.clear_btn.update()) clear_canvas();
 
-            DrawRectangle(0, 0, static_cast<int>(window_width), static_cast<int>(top_bar_height),
-                          Color{.r = 248, .g = 249, .b = 252, .a = 255});
-            DrawLine(0, static_cast<int>(top_bar_height - 1.0f), static_cast<int>(window_width),
-                     static_cast<int>(top_bar_height - 1.0f),
-                     Color{.r = 210, .g = 215, .b = 224, .a = 255});
+        bool is_connected, is_running;
+        { std::lock_guard lock(net_mutex); is_connected = net_state.net.connected; is_running = local_server.running(); }
 
-            ui::draw_button(open_button, "Open File");
-            ui::draw_button(clear_button, "Clear");
-            ui::draw_button(start_button, "Start Server");
-            ui::draw_button(join_button, "Join");
-            ui::draw_button(stop_button, "Stop Server");
-            DrawRectangleRec(join_input_rect, Color{.r = 255, .g = 255, .b = 255, .a = 255});
-            DrawRectangleLinesEx(join_input_rect, join_input_active ? 2.0f : 1.0f,
-                                 join_input_active ? Color{.r = 52, .g = 120, .b = 220, .a = 255}
-                                                   : Color{.r = 165, .g = 170, .b = 184, .a = 255});
-            DrawText(join_session_id_input.empty() ? "Session ID" : join_session_id_input.c_str(),
-                     static_cast<int>(join_input_rect.x + 8.0f),
-                     static_cast<int>(join_input_rect.y + (join_input_rect.height - 16.0f) * 0.5f),
-                     16,
-                     join_session_id_input.empty() ? Color{.r = 140, .g = 145, .b = 156, .a = 255}
-                                                   : Color{.r = 52, .g = 56, .b = 66, .a = 255});
-            for (size_t i = 0; i < tools.size(); ++i)
-            {
-                const Rectangle tool_button{
-                    .x = tool_panel_x,
-                    .y = canvas_rect.y + static_cast<float>(i) * (tool_height + tool_gap),
-                    .width = tool_width,
-                    .height = tool_height};
-                ui::draw_button(tool_button, tools[i].second, tools[i].first == active_tool);
-            }
-            // Right panel: size chooser
-            DrawText("Size", static_cast<int>(right_panel_x), static_cast<int>(right_panel_y), 13,
-                     Color{.r = 72, .g = 76, .b = 88, .a = 255});
-            for (size_t i = 0; i < thicknesses.size(); ++i)
-            {
-                const Rectangle thick_btn{
-                    .x = right_panel_x + static_cast<float>(i % 2) * (thick_btn_w + button_gap),
-                    .y = right_thick_start_y + static_cast<float>(i / 2) * (thick_btn_h + button_gap),
-                    .width = thick_btn_w,
-                    .height = thick_btn_h};
-                const std::string thick_lbl = std::to_string(thicknesses[i]);
-                ui::draw_button(thick_btn, thick_lbl.c_str(), thicknesses[i] == active_thickness);
-            }
-            // Size preview: circle at current thickness filled with active color
-            {
-                const float preview_cy = right_thick_start_y + 3.0f * (thick_btn_h + button_gap) + 16.0f;
-                const int pr = std::clamp(static_cast<int>(active_thickness), 1, static_cast<int>(right_panel_width * 0.4f));
-                DrawCircle(static_cast<int>(right_panel_x + right_panel_width * 0.5f),
-                           static_cast<int>(preview_cy), static_cast<float>(pr),
-                           ui::argb_to_color(active_color));
-                DrawCircleLines(static_cast<int>(right_panel_x + right_panel_width * 0.5f),
-                                static_cast<int>(preview_cy), static_cast<float>(pr),
-                                Color{.r = 120, .g = 126, .b = 138, .a = 255});
-            }
-            // Right panel: color chooser
-            DrawText("Color", static_cast<int>(right_panel_x), static_cast<int>(right_color_label_y), 13,
-                     Color{.r = 72, .g = 76, .b = 88, .a = 255});
-            for (size_t i = 0; i < palette.size(); ++i)
-            {
-                const Rectangle swatch{
-                    .x = right_panel_x + static_cast<float>(i % color_cols) * (color_swatch + button_gap),
-                    .y = right_color_start_y + static_cast<float>(i / color_cols) * (color_swatch + button_gap),
-                    .width = color_swatch,
-                    .height = color_swatch};
-                DrawRectangleRec(swatch, ui::argb_to_color(palette[i]));
-                DrawRectangleLinesEx(swatch, palette[i] == active_color ? 3.0f : 1.0f,
-                                     palette[i] == active_color ? Color{.r = 30, .g = 30, .b = 30, .a = 255}
-                                                                 : Color{.r = 150, .g = 150, .b = 150, .a = 255});
-            }
-            const int title_size = std::max(16, static_cast<int>(top_bar_height * 0.34f));
-            const int detail_size = std::max(11, static_cast<int>(top_bar_height * 0.22f));
-            const int title_x = static_cast<int>(window_width * 0.43f);
-            DrawText("SketchSync", title_x, static_cast<int>(top_bar_height * 0.12f), title_size,
-                     Color{.r = 42, .g = 46, .b = 58, .a = 255});
-            DrawText(current_file.c_str(), title_x, static_cast<int>(top_bar_height * 0.58f), detail_size,
-                     Color{.r = 92, .g = 96, .b = 108, .a = 255});
-            const auto status_text = get_status();
-            DrawText(status_text.c_str(), static_cast<int>(window_width * 0.70f),
-                     static_cast<int>(top_bar_height * 0.38f), detail_size,
-                     Color{.r = 92, .g = 96, .b = 108, .a = 255});
-                const std::string session_text = session_client && session_client->in_session()
-                                                            ? (std::string("Session #") + std::to_string(session_client->session_id()) +
-                                                                (session_client->is_host() ? " (Host)" : " (Guest)"))
-                                                            : "Session: none";
-                DrawText(session_text.c_str(), static_cast<int>(window_width * 0.70f),
-                            static_cast<int>(top_bar_height * 0.68f), detail_size,
-                            Color{.r = 92, .g = 96, .b = 108, .a = 255});
+        if (layout.connect_btn.update()) { if (is_connected) disconnect(); else async_connect_to_server(); }
+        if (layout.local_server_btn.update()) { if (is_running) stop_local_server(); else async_start_local_server(); }
+        if (layout.protocol_toggle.update()) { std::lock_guard lock(net_mutex); net_state.net.protocol = (net_state.net.protocol == connection_protocol::tcp) ? connection_protocol::websocket : connection_protocol::tcp; }
 
-            DrawTexturePro(canvas_texture,
-                           Rectangle{.x = 0.0f,
-                                     .y = 0.0f,
-                                     .width = static_cast<float>(canvas_texture.width),
-                                     .height = static_cast<float>(canvas_texture.height)},
-                           canvas_rect,
-                           Vector2{.x = 0.0f, .y = 0.0f},
-                           0.0f,
-                           WHITE);
-            DrawRectangleLines(static_cast<int>(canvas_rect.x),
-                               static_cast<int>(canvas_rect.y),
-                               static_cast<int>(canvas_rect.width),
-                               static_cast<int>(canvas_rect.height),
-                               Color{.r = 120, .g = 126, .b = 138, .a = 255});
-
-            EndDrawing();
+        if (!net_state.session.in_session) {
+            if (layout.join_btn.update()) join_session();
+            if (layout.create_btn.update()) create_session();
+        } else {
+            if (layout.leave_btn.update()) leave_session();
         }
 
+        layout.host_field.update();
+        layout.port_field.update();
+        layout.session_id_field.update();
+
+        for (auto& tb : layout.tool_buttons) {
+            tb.selected = (active_tool == static_cast<tool_type>(tb.tool_id));
+            if (tb.update()) active_tool = static_cast<tool_type>(tb.tool_id);
+        }
+
+        for (size_t i = 0; i < layout.thickness_buttons.size(); ++i) {
+            constexpr std::array<uint8_t, 4> thicknesses{1, 2, 4, 8};
+            layout.thickness_buttons[i].active = (active_thickness == thicknesses[i]);
+            if (layout.thickness_buttons[i].update()) active_thickness = thicknesses[i];
+        }
+
+        for (auto& s : layout.color_swatches) {
+            s.selected = (active_color == s.color);
+            if (s.update()) active_color = s.color;
+        }
+
+        // Canvas Input
+        const float canvas_area_w = ww - layout.left_panel_width - layout.right_panel_width;
+        const float canvas_area_h = wh - layout.top_bar_height - layout.bottom_panel_height;
+        float cw = canvas_area_w * 0.95f, ch = cw / (static_cast<float>(surface.width)/static_cast<float>(surface.height));
+        if (ch > canvas_area_h * 0.95f) { ch = canvas_area_h * 0.95f; cw = ch * (static_cast<float>(surface.width)/static_cast<float>(surface.height)); }
+        const Rectangle canvas_rect = { .x = layout.left_panel_width + (canvas_area_w - cw) * 0.5f, .y = layout.top_bar_height + (canvas_area_h - ch) * 0.5f, .width = cw, .height = ch };
+
+        if (!IsWindowMinimized()) {
+            const Vector2 mouse = GetMousePosition();
+            process_canvas_input({.inside = CheckCollisionPointRec(mouse, canvas_rect), .pressed = IsMouseButtonPressed(MOUSE_LEFT_BUTTON), .down = IsMouseButtonDown(MOUSE_LEFT_BUTTON), .released = IsMouseButtonReleased(MOUSE_LEFT_BUTTON), .position = ui::normalize_point(ui::clamp_to_canvas(mouse, canvas_rect), canvas_rect), .tool = active_tool});
+        }
+
+        if (dirty.load()) { rebuild_render_texture(); dirty.store(false); }
+        if (active_stroke.has_value()) ui::sync_texture(canvas_texture, surface.copy_pixels_with_preview(*active_stroke), upload_buffer);
+
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+        layout.draw(net_state, get_status(), current_file, is_running);
+
+        DrawTexturePro(canvas_texture, {.x = 0,.y = 0,.width = static_cast<float>(canvas_texture.width), .height = static_cast<float>(canvas_texture.height)}, canvas_rect, {.x = 0,.y = 0}, 0, WHITE);
+        DrawRectangleLinesEx(canvas_rect, 1, DARKGRAY);
+        EndDrawing();
+    }
     stop_local_server();
-    ui::close_window();
-    return 0;
+    if (IsFontValid(ui::default_font)) UnloadFont(ui::default_font);
+    ui::close_window(); return 0;
 }

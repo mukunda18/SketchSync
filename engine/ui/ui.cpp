@@ -12,6 +12,8 @@
 
 namespace ui
 {
+    Font default_font{};
+
     namespace
     {
         constexpr std::array<uint8_t, 4> DRAW_LOG_MAGIC{'S', 'S', 'D', 'O'};
@@ -27,9 +29,9 @@ namespace ui
     Color argb_to_color(const uint32_t argb)
     {
         return Color{
-            .r = static_cast<unsigned char>((argb >> 16) & 0xFF),
+            .r = static_cast<unsigned char>(argb & 0xFF),
             .g = static_cast<unsigned char>((argb >> 8) & 0xFF),
-            .b = static_cast<unsigned char>(argb & 0xFF),
+            .b = static_cast<unsigned char>((argb >> 16) & 0xFF),
             .a = static_cast<unsigned char>((argb >> 24) & 0xFF)
         };
     }
@@ -191,14 +193,11 @@ namespace ui
         return true;
     }
 
-    void sync_texture(Texture2D& texture, const std::vector<uint32_t>& pixels,
+    void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels,
                       std::vector<Color>& upload_buffer)
     {
-        upload_buffer.resize(pixels.size());
-        for (size_t i = 0; i < pixels.size(); ++i)
-            upload_buffer[i] = argb_to_color(pixels[i]);
-        if (!upload_buffer.empty())
-            UpdateTexture(texture, upload_buffer.data());
+        if (!pixels.empty())
+            UpdateTexture(texture, pixels.data());
     }
 
 }
