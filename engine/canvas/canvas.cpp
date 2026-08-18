@@ -77,11 +77,6 @@ std::vector<uint32_t> canvas::copy_pixels_with_preview(const draw_operation& op)
     return std::move(preview.pixels);
 }
 
-uint32_t canvas::append(draw_operation op)
-{
-    return apply(std::move(op));
-}
-
 std::vector<draw_operation> canvas::snapshot() const
 {
     std::lock_guard lock(operations_mutex);

@@ -39,14 +39,9 @@ namespace ui
     Color argb_to_color(uint32_t argb);
     canvas_point normalize_point(Vector2 point, struct Rectangle canvas_rect);
     Vector2 clamp_to_canvas(Vector2 point, struct Rectangle canvas_rect);
-    draw_operation begin_freehand(canvas_point start);
-    void append_point(draw_operation& op, canvas_point point);
-    bool has_points(const draw_operation& op);
 
-    bool button_hit(struct Rectangle rect);
-    void draw_button(struct Rectangle rect, const char* label, bool active = false);
-
-    bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status);
+    bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status, uint32_t& saved_seq);
+    uint32_t read_saved_seq(const std::filesystem::path& path);
     void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels,
                       std::vector<Color>& upload_buffer);
 }

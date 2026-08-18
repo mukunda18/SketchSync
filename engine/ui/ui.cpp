@@ -14,15 +14,9 @@ namespace ui
 {
     Font default_font{};
 
-    namespace
-    {
-        constexpr std::array<uint8_t, 4> DRAW_LOG_MAGIC{'S', 'S', 'D', 'O'};
-    }
 
     void close_window()
     {
-        // The global qualification selects raylib's zero-argument API and
-        // avoids ambiguity with Win32's CloseWindow(HWND).
         ::CloseWindow();
     }
 
@@ -54,59 +48,7 @@ namespace ui
         };
     }
 
-    ::draw_operation begin_freehand(const canvas_point start)
-    {
-        ::draw_operation op;
-        op.member_id = 1;
-        op.tool = tool_type::freehand;
-        op.color = HOST_COLOR;
-        op.thickness = 2;
-        op.points.push_back(start);
-        return op;
-    }
-
-    void append_point(::draw_operation& op, const canvas_point point)
-    {
-        if (op.points.empty() || op.points.back().x != point.x || op.points.back().y != point.y)
-            op.points.push_back(point);
-    }
-
-    bool has_points(const ::draw_operation& op)
-    {
-        return !op.points.empty();
-    }
-
-    bool button_hit(const struct Rectangle rect)
-    {
-        return CheckCollisionPointRec(GetMousePosition(), rect) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
-    }
-
-    void draw_button(const struct Rectangle rect, const char* label, const bool active)
-    {
-        const Vector2 mouse = GetMousePosition();
-        const bool hovered = CheckCollisionPointRec(mouse, rect);
-        Color fill;
-        if (active && hovered)
-            fill = Color{.r = 82, .g = 140, .b = 240, .a = 255};
-        else if (active)
-            fill = Color{.r = 52, .g = 120, .b = 220, .a = 255};
-        else if (hovered)
-            fill = Color{.r = 98, .g = 102, .b = 114, .a = 255};
-        else
-            fill = Color{.r = 72, .g = 76, .b = 88, .a = 255};
-        DrawRectangleRec(rect, fill);
-        DrawRectangleLinesEx(rect, active ? 2.0f : 1.0f, Color{.r = 165, .g = 170, .b = 184, .a = 255});
-
-        constexpr int text_size = 18;
-        const int text_width = MeasureText(label, text_size);
-        DrawText(label,
-                 static_cast<int>(rect.x + (rect.width - static_cast<float>(text_width)) * 0.5f),
-                 static_cast<int>(rect.y + (rect.height - static_cast<float>(text_size)) * 0.5f),
-                 text_size,
-                 RAYWHITE);
-    }
-
-    bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status)
+    bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status, uint32_t& saved_seq)
     {
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open())
@@ -119,67 +61,39 @@ namespace ui
         const std::span<const uint8_t> data(file_data.data(), file_data.size());
         std::vector<draw_operation> operations;
         size_t offset = 0;
+        saved_seq = 0;
 
-        if (file_data.size() >= DRAW_LOG_MAGIC.size() &&
-            std::equal(DRAW_LOG_MAGIC.begin(), DRAW_LOG_MAGIC.end(), file_data.begin()))
+        constexpr std::array<uint8_t, 4> SKSY_MAGIC{'S', 'K', 'S', 'Y'};
+        if (file_data.size() < 16 || !std::equal(SKSY_MAGIC.begin(), SKSY_MAGIC.end(), file_data.begin()))
         {
-            offset = DRAW_LOG_MAGIC.size();
-
-            while (offset + sizeof(uint32_t) <= file_data.size())
-            {
-                const uint32_t op_len = bytes::read32(data, offset);
-                if (offset + op_len > file_data.size())
-                {
-                    status = "Truncated draw log";
-                    return false;
-                }
-
-                auto op_res = parseDrawOperation(std::span<const uint8_t>(file_data.data() + offset, op_len));
-                if (!op_res)
-                {
-                    status = op_res.message;
-                    return false;
-                }
-
-                operations.push_back(std::move(op_res.value));
-                offset += op_len;
-            }
+            status = "Invalid or unsupported SketchSync file format";
+            return false;
         }
-        else
+
+        size_t off = 4;
+        bytes::read32(data, off);          // skip version field
+        saved_seq = bytes::read32(data, off);
+        bytes::read32(data, off);          // skip reserved field
+        offset = 16;
+
+        while (offset + sizeof(uint32_t) <= file_data.size())
         {
-            while (offset + Header::SIZE <= file_data.size())
+            const uint32_t op_len = bytes::read32(data, offset);
+            if (offset + op_len > file_data.size())
             {
-                const auto header_res = parseHeader(std::span<const uint8_t>(file_data.data() + offset, file_data.size() - offset));
-                if (!header_res)
-                {
-                    status = header_res.message;
-                    return false;
-                }
-
-                const Header header = header_res.value;
-                offset += Header::SIZE;
-
-                if (offset + header.length > file_data.size())
-                {
-                    status = "Truncated frame";
-                    return false;
-                }
-
-                const auto payload = std::span<const uint8_t>(file_data.data() + offset, header.length);
-                if (header.opcode == Opcode::DRAW)
-                {
-                    auto op_res = parseDrawOperation(payload);
-                    if (!op_res)
-                    {
-                        status = op_res.message;
-                        return false;
-                    }
-
-                    operations.push_back(op_res.value);
-                }
-
-                offset += header.length;
+                status = "Truncated draw log";
+                return false;
             }
+
+            auto op_res = parseDrawOperation(std::span<const uint8_t>(file_data.data() + offset, op_len));
+            if (!op_res)
+            {
+                status = op_res.message;
+                return false;
+            }
+
+            operations.push_back(std::move(op_res.value));
+            offset += op_len;
         }
 
         if (offset != file_data.size())
@@ -192,6 +106,32 @@ namespace ui
         status = "Loaded " + std::to_string(operations.size()) + " draw ops";
         return true;
     }
+
+    uint32_t read_saved_seq(const std::filesystem::path& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open())
+        {
+            return 0;
+        }
+
+        std::array<uint8_t, 16> header_buf{};
+        file.read(reinterpret_cast<char*>(header_buf.data()), header_buf.size());
+        if (file.gcount() < 16)
+        {
+            return 0;
+        }
+
+        constexpr std::array<uint8_t, 4> SKSY_MAGIC{'S', 'K', 'S', 'Y'};
+        if (std::equal(SKSY_MAGIC.begin(), SKSY_MAGIC.end(), header_buf.begin()))
+        {
+            std::span<const uint8_t> data(header_buf.data(), header_buf.size());
+            size_t off = 8;
+            return bytes::read32(data, off);
+        }
+        return 0;
+    }
+
 
     void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels,
                       std::vector<Color>& upload_buffer)
