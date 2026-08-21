@@ -10,7 +10,7 @@ struct clientConnection
     webSocket* ws = nullptr;
     std::mutex write_mutex;
 
-    result<size_t> send(std::span<const uint8_t> data)
+    result<size_t> send(const std::span<const uint8_t> data)
     {
         std::lock_guard lock(write_mutex);
         if (tcp) return tcp->send(data);

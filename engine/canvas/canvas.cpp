@@ -17,20 +17,20 @@ namespace
 
     [[nodiscard]] uint32_t alpha_blend_over(const uint32_t dst_rgba, const uint32_t src_rgba, const float coverage)
     {
-        const uint8_t src_a = static_cast<uint8_t>((src_rgba >> 24) & 0xFF);
+        const auto src_a = static_cast<uint8_t>((src_rgba >> 24) & 0xFF);
         if (src_a == 0 || coverage <= 0.0f)
             return dst_rgba;
 
         const float src_alpha = (static_cast<float>(src_a) / 255.0f) * std::clamp(coverage, 0.0f, 1.0f);
 
-        const uint8_t dst_r = static_cast<uint8_t>(dst_rgba & 0xFF);
-        const uint8_t dst_g = static_cast<uint8_t>((dst_rgba >> 8) & 0xFF);
-        const uint8_t dst_b = static_cast<uint8_t>((dst_rgba >> 16) & 0xFF);
-        const uint8_t dst_a = static_cast<uint8_t>((dst_rgba >> 24) & 0xFF);
+        const auto dst_r = static_cast<uint8_t>(dst_rgba & 0xFF);
+        const auto dst_g = static_cast<uint8_t>((dst_rgba >> 8) & 0xFF);
+        const auto dst_b = static_cast<uint8_t>((dst_rgba >> 16) & 0xFF);
+        const auto dst_a = static_cast<uint8_t>((dst_rgba >> 24) & 0xFF);
 
-        const uint8_t src_r = static_cast<uint8_t>(src_rgba & 0xFF);
-        const uint8_t src_g = static_cast<uint8_t>((src_rgba >> 8) & 0xFF);
-        const uint8_t src_b = static_cast<uint8_t>((src_rgba >> 16) & 0xFF);
+        const auto src_r = static_cast<uint8_t>(src_rgba & 0xFF);
+        const auto src_g = static_cast<uint8_t>((src_rgba >> 8) & 0xFF);
+        const auto src_b = static_cast<uint8_t>((src_rgba >> 16) & 0xFF);
 
         const float dst_alpha = static_cast<float>(dst_a) / 255.0f;
         const float out_alpha = src_alpha + dst_alpha * (1.0f - src_alpha);
@@ -200,8 +200,7 @@ void canvas::rasterize(const draw_operation& op)
                 {
                     const float edge_x = (radius + 0.5f) - std::abs((static_cast<float>(x) + 0.5f) - cx);
                     const float edge_y = (radius + 0.5f) - std::abs((static_cast<float>(y) + 0.5f) - cy);
-                    const float coverage = std::clamp(std::min(edge_x, edge_y), 0.0f, 1.0f);
-                    if (coverage > 0.0f)
+                    if (const float coverage = std::clamp(std::min(edge_x, edge_y), 0.0f, 1.0f); coverage > 0.0f)
                         blend_pixel(x, y, color, coverage);
                     continue;
                 }
@@ -209,8 +208,7 @@ void canvas::rasterize(const draw_operation& op)
                 const float dx = (static_cast<float>(x) + 0.5f) - cx;
                 const float dy = (static_cast<float>(y) + 0.5f) - cy;
                 const float dist = std::sqrt(dx * dx + dy * dy);
-                const float coverage = std::clamp((radius + 0.5f) - dist, 0.0f, 1.0f);
-                if (coverage > 0.0f)
+                if (const float coverage = std::clamp((radius + 0.5f) - dist, 0.0f, 1.0f); coverage > 0.0f)
                     blend_pixel(x, y, color, coverage);
             }
         }
@@ -250,10 +248,10 @@ void canvas::rasterize(const draw_operation& op)
                     put(static_cast<float>(x), static_cast<float>(y));
             return;
         }
-        line(x0, y0, x1, y0);
-        line(x1, y0, x1, y1);
-        line(x1, y1, x0, y1);
-        line(x0, y1, x0, y0);
+        line(static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(x1), static_cast<float>(y0));
+        line(static_cast<float>(x1), static_cast<float>(y0), static_cast<float>(x1), static_cast<float>(y1));
+        line(static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(x0), static_cast<float>(y1));
+        line(static_cast<float>(x0), static_cast<float>(y1), static_cast<float>(x0), static_cast<float>(y0));
     }
     else if ((op.tool == tool_type::ellipse || op.tool == tool_type::filled_ellipse) && op.points.size() > 1)
     {
@@ -272,7 +270,7 @@ void canvas::rasterize(const draw_operation& op)
                 const int span = static_cast<int>(rx * std::sqrt(
                     std::max(0.0, 1.0 - (static_cast<double>(y) * y) / (static_cast<double>(ry) * ry))));
                 for (int x = -span; x <= span; ++x)
-                    put(cx + x, cy + y);
+                    put(static_cast<float>(cx + x), static_cast<float>(cy + y));
             }
             return;
         }
@@ -282,7 +280,7 @@ void canvas::rasterize(const draw_operation& op)
         long long y = ry;
         long long px = 0;
         long long py = 2 * rx2 * y;
-        double decision = ry2 - rx2 * ry + 0.25 * rx2;
+        double decision = static_cast<double>(ry2 - rx2 * ry) + 0.25 * static_cast<double>(rx2);
         while (px < py)
         {
             put(static_cast<float>(cx + static_cast<int>(x)), static_cast<float>(cy + static_cast<int>(y)));
@@ -292,15 +290,15 @@ void canvas::rasterize(const draw_operation& op)
             ++x;
             px += 2 * ry2;
             if (decision < 0)
-                decision += ry2 + px;
+                decision += static_cast<double>(ry2 + px);
             else
             {
                 --y;
                 py -= 2 * rx2;
-                decision += ry2 + px - py;
+                decision += static_cast<double>(ry2 + px - py);
             }
         }
-        decision = ry2 * (x + 0.5) * (x + 0.5) + rx2 * (y - 1) * (y - 1) - rx2 * ry2;
+        decision = static_cast<double>(ry2) * (static_cast<double>(x) + 0.5) * (static_cast<double>(x) + 0.5) + static_cast<double>(rx2) * static_cast<double>((y - 1) * (y - 1)) - static_cast<double>(rx2 * ry2);
         while (y >= 0)
         {
             put(static_cast<float>(cx + static_cast<int>(x)), static_cast<float>(cy + static_cast<int>(y)));
@@ -310,12 +308,12 @@ void canvas::rasterize(const draw_operation& op)
             --y;
             py -= 2 * rx2;
             if (decision > 0)
-                decision += rx2 - py;
+                decision += static_cast<double>(rx2 - py);
             else
             {
                 ++x;
                 px += 2 * ry2;
-                decision += rx2 - py + px;
+                decision += static_cast<double>(rx2 - py + px);
             }
         }
     }
@@ -379,8 +377,7 @@ std::optional<draw_operation> process_canvas_input(
         if (tool == tool_type::freehand || tool == tool_type::eraser || tool == tool_type::brush)
         {
             const int dx = points.empty() ? 0 : static_cast<int>(input.position.x) - points.back().x;
-            const int dy = points.empty() ? 0 : static_cast<int>(input.position.y) - points.back().y;
-            if (points.empty() || dx * dx + dy * dy >= 32 * 32)
+            if (const int dy = points.empty() ? 0 : static_cast<int>(input.position.y) - points.back().y; points.empty() || dx * dx + dy * dy >= 32 * 32)
                 temporary->points.push_back(input.position);
         }
         else if (tool != tool_type::bucket_fill)

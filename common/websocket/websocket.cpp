@@ -26,13 +26,13 @@ webSocket::~webSocket()
     if (connected_) close();
 }
 
-result<bool> webSocket::connect(webaddr address, std::chrono::milliseconds timeout)
+result<bool> webSocket::connect(webaddr address, const std::chrono::milliseconds timeout)
 {
     address_ = std::move(address);
     return connect(timeout);
 }
 
-result<bool> webSocket::connect(std::chrono::milliseconds timeout)
+result<bool> webSocket::connect(const std::chrono::milliseconds timeout)
 {
     try
     {
@@ -55,15 +55,16 @@ result<bool> webSocket::connect(std::chrono::milliseconds timeout)
 
         if (!connect_success)
         {
-            ws_.next_layer().close(ec);
+            beast::error_code close_ec;
+            ws_.next_layer().close(close_ec);
             std::string msg = connect_ec ? connect_ec.message() : "Connection timed out";
             return {.value = false, .err = error::connect_failed, .message = std::move(msg)};
         }
 
-        websocket_beast::stream_base::timeout opt{
-            timeout,
-            websocket_beast::stream_base::none(),
-            false
+        const websocket_beast::stream_base::timeout opt{
+            .handshake_timeout = timeout,
+            .idle_timeout = websocket_beast::stream_base::none(),
+            .keep_alive_pings = false
         };
         ws_.set_option(opt);
 
@@ -80,7 +81,8 @@ result<bool> webSocket::connect(std::chrono::milliseconds timeout)
 
         if (!handshake_success)
         {
-            ws_.next_layer().close(ec);
+            beast::error_code close_ec;
+            ws_.next_layer().close(close_ec);
             std::string msg = handshake_ec ? handshake_ec.message() : "Handshake timed out";
             return {.value = false, .err = error::handshake_failed, .message = std::move(msg)};
         }
@@ -129,14 +131,15 @@ result<std::vector<uint8_t>> webSocket::receive()
 
 result<bool> webSocket::close()
 {
-    beast::error_code ec;
     if (ws_.is_open())
     {
-        ws_.close(websocket_beast::close_code::normal, ec);
+        beast::error_code ws_close_ec;
+        ws_.close(websocket_beast::close_code::normal, ws_close_ec);
     }
     if (ws_.next_layer().is_open())
     {
-        ws_.next_layer().close(ec);
+        beast::error_code layer_close_ec;
+        ws_.next_layer().close(layer_close_ec);
     }
     connected_ = false;
     return {.value = true, .err = error::none, .message = {}};

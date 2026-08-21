@@ -125,7 +125,7 @@ namespace ui
         constexpr std::array<uint8_t, 4> SKSY_MAGIC{'S', 'K', 'S', 'Y'};
         if (std::equal(SKSY_MAGIC.begin(), SKSY_MAGIC.end(), header_buf.begin()))
         {
-            std::span<const uint8_t> data(header_buf.data(), header_buf.size());
+            const std::span<const uint8_t> data(header_buf.data(), header_buf.size());
             size_t off = 8;
             return bytes::read32(data, off);
         }
@@ -133,8 +133,7 @@ namespace ui
     }
 
 
-    void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels,
-                      std::vector<Color>& upload_buffer)
+    void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels)
     {
         if (!pixels.empty())
             UpdateTexture(texture, pixels.data());

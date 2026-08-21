@@ -7,7 +7,7 @@
 
 #include "common/bytes.h"
 
-persistence_writer::persistence_writer(std::string file_path, uint32_t start_after_seq)
+persistence_writer::persistence_writer(std::string file_path, const uint32_t start_after_seq)
     : file_path_(std::move(file_path)),
       start_after_seq_(start_after_seq),
       saved_seq_(start_after_seq)
@@ -15,12 +15,17 @@ persistence_writer::persistence_writer(std::string file_path, uint32_t start_aft
     thread_ = std::thread(&persistence_writer::run, this);
 }
 
-persistence_writer::~persistence_writer()
+void persistence_writer::stop()
 {
     stop_.store(true);
     cv_.notify_one();
     if (thread_.joinable())
         thread_.join();
+}
+
+persistence_writer::~persistence_writer()
+{
+    stop();
 }
 
 void persistence_writer::enqueue(const draw_operation& op)
@@ -32,7 +37,7 @@ void persistence_writer::enqueue(const draw_operation& op)
     cv_.notify_one();
 }
 
-void persistence_writer::update_header_seq(std::fstream& file)
+void persistence_writer::update_header_seq(std::fstream& file) const
 {
     const uint32_t seq = saved_seq_.load();
     std::vector<uint8_t> buffer(4);
@@ -44,13 +49,10 @@ void persistence_writer::update_header_seq(std::fstream& file)
 
 void persistence_writer::run()
 {
-    const bool is_new_file = !std::filesystem::exists(file_path_) || std::filesystem::file_size(file_path_) == 0;
-
     // Open file in binary read/write mode. If new, open with app to create, then re-open as in/out/binary
-    if (is_new_file)
+    if (!std::filesystem::exists(file_path_) || std::filesystem::file_size(file_path_) == 0)
     {
-        std::ofstream create_file(file_path_, std::ios::binary);
-        if (create_file.is_open())
+        if (std::ofstream create_file(file_path_, std::ios::binary); create_file.is_open())
         {
             constexpr std::array<uint8_t, 4> MAGIC{'S', 'K', 'S', 'Y'};
             create_file.write(reinterpret_cast<const char*>(MAGIC.data()), MAGIC.size());

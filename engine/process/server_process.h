@@ -7,23 +7,16 @@
 
 #include "common/results.h"
 
-struct server_process_launch
-{
-    std::filesystem::path executable;
-    std::vector<std::string> arguments;
-};
-
 struct server_process
 {
     server_process() = default;
-    ~server_process();
 
     server_process(const server_process&) = delete;
     server_process& operator=(const server_process&) = delete;
     server_process(server_process&&) = delete;
     server_process& operator=(server_process&&) = delete;
 
-    result<bool> start(const server_process_launch& launch);
+    result<bool> start(const std::filesystem::path& executable, const std::vector<std::string>& arguments);
     result<bool> stop(unsigned exit_code = 0);
 
     [[nodiscard]] bool running() const noexcept;

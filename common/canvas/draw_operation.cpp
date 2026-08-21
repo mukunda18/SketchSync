@@ -1,8 +1,6 @@
 #include "common/canvas/draw_operation.h"
 #include "common/bytes.h"
 
-#include <cstddef>
-
 std::vector<uint8_t> serializeDrawOperation(const draw_operation& op)
 {
     const auto point_count = static_cast<uint16_t>(op.points.size());

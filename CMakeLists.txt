@@ -27,8 +27,15 @@ add_executable(engine
     engine/engine.h
     engine/process/server_process.cpp
     engine/process/server_process.h
-    engine/client/sessionClient.cpp
-    engine/client/sessionClient.h
+    engine/network/network_manager.cpp
+    engine/network/network_manager.h
+    engine/network/connection_types.h
+    engine/session/session_manager.cpp
+    engine/session/session_manager.h
+    engine/session/sessionClient.cpp
+    engine/session/sessionClient.h
+    engine/file/file_manager.cpp
+    engine/file/file_manager.h
     engine/persistence/persistenceWriter.cpp
     engine/persistence/persistenceWriter.h
     engine/ui/ui.cpp

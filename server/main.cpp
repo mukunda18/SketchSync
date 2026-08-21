@@ -27,7 +27,7 @@ namespace
     }
 }
 
-int main(int argc, char* argv[])
+int main(const int argc, char* argv[])
 {
     try
     {

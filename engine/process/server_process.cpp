@@ -11,11 +11,6 @@
 #endif
 #include <windows.h>
 
-server_process::~server_process()
-{
-    stop();
-}
-
 std::string server_process::quote_argument(const std::string& argument)
 {
     if (argument.find_first_of(" \t\"") == std::string::npos)
@@ -44,19 +39,19 @@ std::string server_process::build_command_line(const std::filesystem::path& exec
     return command_line;
 }
 
-result<bool> server_process::start(const server_process_launch& launch)
+result<bool> server_process::start(const std::filesystem::path& executable, const std::vector<std::string>& arguments)
 {
     if (running_)
         return {.value = false, .err = error::rejected, .message = "server already running"};
 
-    if (launch.executable.empty() || !std::filesystem::exists(launch.executable))
+    if (executable.empty() || !std::filesystem::exists(executable))
         return {.value = false, .err = error::rejected, .message = "server executable not found"};
 
-    std::string command_line = build_command_line(launch.executable, launch.arguments);
+    std::string command_line = build_command_line(executable, arguments);
     std::vector<char> cmd_buf(command_line.begin(), command_line.end());
     cmd_buf.push_back('\0');
 
-    HANDLE job = CreateJobObjectA(nullptr, nullptr);
+    const HANDLE job = CreateJobObjectA(nullptr, nullptr);
     if (job != nullptr)
     {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
@@ -69,7 +64,7 @@ result<bool> server_process::start(const server_process_launch& launch)
     PROCESS_INFORMATION process_info{};
 
     const BOOL created = CreateProcessA(
-        launch.executable.string().c_str(),
+        executable.string().c_str(),
         cmd_buf.data(),
         nullptr,
         nullptr,

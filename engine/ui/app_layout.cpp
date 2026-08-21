@@ -7,7 +7,7 @@ namespace ui {
     // Internal helper for proper text rendering using the app font
     static void DrawTextLayout(const char* text, const int x, const int y, const float size, const Color color) {
         if (IsFontValid(default_font)) {
-            DrawTextEx(default_font, text, { static_cast<float>(x), static_cast<float>(y) }, size, 0.0f, color);
+            DrawTextEx(default_font, text, { .x = static_cast<float>(x), .y = static_cast<float>(y) }, size, 0.0f, color);
         } else {
             DrawText(text, x, y, static_cast<int>(size), color);
         }
@@ -101,7 +101,18 @@ namespace ui {
         for (size_t i = 0; i < color_swatches.size(); ++i) color_swatches[i].bounds = {.x = window_width - right_panel_width + 15 + static_cast<float>(i % 4) * 45, .y = next_y + 25 + static_cast<float>(i / 4) * 45, .width = 40, .height = 40};
     }
 
-    void AppLayout::draw(const network_session_state& net, const std::string& status, const std::string& current_file, const bool server_running, const bool auto_save_on) const {
+    void AppLayout::draw(const connection_protocol protocol,
+                         const bool connected,
+                         const connection_state state,
+                         const std::string& host,
+                         const std::string& port,
+                         const bool in_session,
+                         const uint32_t session_id,
+                         const uint32_t member_id,
+                         const std::string& status,
+                         const std::string& current_file,
+                         const bool server_running,
+                         const bool auto_save_on) const {
         left_panel.draw();
         right_panel.draw();
         bottom_panel.draw();
@@ -123,20 +134,20 @@ namespace ui {
 
         // Left Info
         DrawTextLayout("Network Info", 15, static_cast<int>(top_bar_height) + 15, 18.0f, DARKGRAY);
-        if (net.net.protocol == connection_protocol::tcp) {
-            if (net.net.connected) {
-                DrawTextLayout(TextFormat("TCP: %s:%s", net.net.host.c_str(), net.net.port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
+        if (protocol == connection_protocol::tcp) {
+            if (connected) {
+                DrawTextLayout(TextFormat("TCP: %s:%s", host.c_str(), port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
             } else {
                 DrawTextLayout("TCP: UDP Discovery", 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
             }
         } else {
-            DrawTextLayout(TextFormat("WS: %s:%s", net.net.host.c_str(), net.net.port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
+            DrawTextLayout(TextFormat("WS: %s:%s", host.c_str(), port.c_str()), 15, static_cast<int>(top_bar_height) + 45, 14.0f, GRAY);
         }
 
-        const char* s_str = net.net.connected ? "Connected" : (net.state == connection_state::connecting ? "Connecting..." : "Disconnected");
-        const Color s_col = net.net.connected ? GREEN : (net.state == connection_state::connecting ? ORANGE : RED);
+        const char* s_str = connected ? "Connected" : (state == connection_state::connecting ? "Connecting..." : "Disconnected");
+        const Color s_col = connected ? GREEN : (state == connection_state::connecting ? ORANGE : RED);
         DrawTextLayout(TextFormat("Status: %s", s_str), 15, static_cast<int>(top_bar_height) + 65, 14.0f, s_col);
-        if (net.session.in_session) DrawTextLayout(TextFormat("Session: #%d (M:%d)", net.session.session_id, net.session.member_id), 15, static_cast<int>(top_bar_height) + 110, 14.0f, BLUE);
+        if (in_session) DrawTextLayout(TextFormat("Session: #%d (M:%d)", session_id, member_id), 15, static_cast<int>(top_bar_height) + 110, 14.0f, BLUE);
         else DrawTextLayout("Not in session", 15, static_cast<int>(top_bar_height) + 110, 14.0f, GRAY);
         DrawTextWrapped(status, 15, static_cast<int>(top_bar_height) + 145, left_panel_width - 30.0f, 13.0f, DARKBLUE);
 
@@ -151,17 +162,17 @@ namespace ui {
         for (const auto& cs : color_swatches) cs.draw();
 
         // Controls
-        if (net.net.protocol == connection_protocol::websocket) {
+        if (protocol == connection_protocol::websocket) {
             host_field.draw();
             port_field.draw();
         }
 
         Button proto = protocol_toggle;
-        proto.label = (net.net.protocol == connection_protocol::tcp) ? "TCP" : "WS";
+        proto.label = (protocol == connection_protocol::tcp) ? "TCP" : "WS";
         proto.draw();
 
         Button conn = connect_btn;
-        conn.label = net.net.connected ? "Disconnect" : "Connect";
+        conn.label = connected ? "Disconnect" : "Connect";
         conn.draw();
 
         Button local = local_server_btn;
@@ -169,7 +180,7 @@ namespace ui {
         local.draw();
 
         session_id_field.draw();
-        if (!net.session.in_session) { join_btn.draw(); create_btn.draw(); }
+        if (!in_session) { join_btn.draw(); create_btn.draw(); }
         else { leave_btn.draw(); }
     }
 }
