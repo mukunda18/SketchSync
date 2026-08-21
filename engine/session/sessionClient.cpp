@@ -1,4 +1,4 @@
-#include "engine/client/sessionClient.h"
+#include "engine/session/sessionClient.h"
 
 sessionClient::sessionClient(tcpSocket& tcp)
     : conn_{.tcp = &tcp}

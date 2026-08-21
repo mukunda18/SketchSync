@@ -42,8 +42,7 @@ namespace ui
 
     bool load_binary_replay(const std::filesystem::path& path, canvas& surface, std::string& status, uint32_t& saved_seq);
     uint32_t read_saved_seq(const std::filesystem::path& path);
-    void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels,
-                      std::vector<Color>& upload_buffer);
+    void sync_texture(const Texture2D& texture, const std::vector<uint32_t>& pixels);
 }
 
 #endif

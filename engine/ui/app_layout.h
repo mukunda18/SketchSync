@@ -2,8 +2,9 @@
 #define SKETCHSYNC_APP_LAYOUT_H
 
 #include "components.h"
-#include "engine/client/network_session_state.h"
+#include "engine/network/connection_types.h"
 #include "common/canvas/draw_operation.h"
+#include <cstdint>
 #include <string>
 
 namespace ui {
@@ -45,7 +46,18 @@ namespace ui {
         std::vector<Button> thickness_buttons;
 
         void update_layout(float window_width, float window_height, connection_protocol protocol = connection_protocol::tcp);
-        void draw(const network_session_state& net, const std::string& status, const std::string& current_file, bool server_running, bool auto_save_on) const;
+        void draw(connection_protocol protocol,
+                  bool connected,
+                  connection_state state,
+                  const std::string& host,
+                  const std::string& port,
+                  bool in_session,
+                  uint32_t session_id,
+                  uint32_t member_id,
+                  const std::string& status,
+                  const std::string& current_file,
+                  bool server_running,
+                  bool auto_save_on) const;
     };
 }
 

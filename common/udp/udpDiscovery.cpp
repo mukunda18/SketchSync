@@ -96,28 +96,32 @@ namespace udp_discovery {
             udp::socket socket(io);
             boost::system::error_code ec;
 
-            socket.open(udp::v4(), ec);
+            (void)socket.open(udp::v4(), ec);
             if (ec) {
                 return {.err = error::connect_failed, .message = "Failed to open UDP socket: " + ec.message()};
             }
 
-            socket.set_option(boost::asio::socket_base::broadcast(true), ec);
-            socket.set_option(boost::asio::socket_base::reuse_address(true), ec);
+            (void)socket.set_option(boost::asio::socket_base::broadcast(true), ec);
+            if (ec) return {.err = error::connect_failed, .message = "Failed to set broadcast option: " + ec.message()};
+            (void)socket.set_option(boost::asio::socket_base::reuse_address(true), ec);
+            if (ec) return {.err = error::connect_failed, .message = "Failed to set reuse address option: " + ec.message()};
 
-            socket.bind(udp::endpoint(udp::v4(), 0), ec);
+            (void)socket.bind(udp::endpoint(udp::v4(), 0), ec);
             if (ec) {
                 return {.err = error::connect_failed, .message = "Failed to bind UDP client: " + ec.message()};
             }
 
             const auto req_data = udp_proto::serializeDiscoverMessage({.session_id = session_id});
 
-            // Send broadcast on LAN
-            udp::endpoint bcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
-            socket.send_to(net::buffer(req_data), bcast_ep, 0, ec);
+            // Send discover request on LAN broadcast
+            udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
+            const auto send_bcast_res = socket.send_to(net::buffer(req_data), broadcast_ep, 0, ec);
+            (void)send_bcast_res;  // Ignore send result; continue on network errors
 
             // Also send directly to localhost loopback for same-machine testing
             udp::endpoint loopback_ep(boost::asio::ip::address_v4::loopback(), udp_port);
-            socket.send_to(net::buffer(req_data), loopback_ep, 0, ec);
+            const auto send_loopback_res = socket.send_to(net::buffer(req_data), loopback_ep, 0, ec);
+            (void)send_loopback_res;  // Ignore send result; continue on network errors
 
             std::array<uint8_t, 256> recv_buf{};
             udp::endpoint sender_ep;
@@ -133,19 +137,20 @@ namespace udp_discovery {
                 if (recv_ec || found) {
                     return;
                 }
-                const auto offer_res = udp_proto::parseOfferMessage(std::span<const uint8_t>(recv_buf.data(), bytes));
-                if (offer_res && offer_res.value.session_id == session_id) {
+                if (const auto offer_res = udp_proto::parseOfferMessage(std::span<const uint8_t>(recv_buf.data(), bytes));
+                    offer_res && offer_res.value.session_id == session_id)
+                {
                     found = true;
                     host_ip = sender_ep.address().to_string();
                     if (sender_ep.address().is_unspecified() || sender_ep.address().is_loopback()) {
                         host_ip = "127.0.0.1";
                     }
                     host_port = offer_res.value.tcp_port;
-                    timer.cancel();
-                    socket.close();
+                    (void)timer.cancel();
+                    boost::system::error_code socket_close_ec;
+                    (void)socket.close(socket_close_ec);
                     return;
                 }
-                // Continue listening until timer cancels
                 if (!found && socket.is_open()) {
                     socket.async_receive_from(net::buffer(recv_buf), sender_ep, do_receive);
                 }
@@ -156,7 +161,7 @@ namespace udp_discovery {
             timer.async_wait([&](const boost::system::error_code& timer_ec) {
                 if (!timer_ec && !found) {
                     boost::system::error_code close_ec;
-                    socket.close(close_ec);
+                    (void)socket.close(close_ec);
                 }
             });
 
@@ -190,15 +195,18 @@ namespace udp_discovery {
             const udp::endpoint listen_ep(udp::v4(), udp_port_);
             boost::system::error_code ec;
 
-            socket_->open(listen_ep.protocol(), ec);
+            (void)socket_->open(listen_ep.protocol(), ec);
             if (ec) return;
 
-            socket_->set_option(boost::asio::socket_base::reuse_address(true), ec);
-            socket_->set_option(boost::asio::socket_base::broadcast(true), ec);
+            (void)socket_->set_option(boost::asio::socket_base::reuse_address(true), ec);
+            if (ec) return;
+            (void)socket_->set_option(boost::asio::socket_base::broadcast(true), ec);
+            if (ec) return;
 
-            socket_->bind(listen_ep, ec);
+            (void)socket_->bind(listen_ep, ec);
             if (ec) {
-                socket_->close(ec);
+                boost::system::error_code bind_close_ec;
+                (void)socket_->close(bind_close_ec);
                 return;
             }
 
@@ -211,8 +219,8 @@ namespace udp_discovery {
     void responder::stop() {
         stop_flag_.store(true);
         if (socket_) {
-            boost::system::error_code ec;
-            socket_->close(ec);
+            boost::system::error_code close_ec;
+            (void)socket_->close(close_ec);
         }
         if (worker_.joinable()) {
             worker_.join();
@@ -220,7 +228,8 @@ namespace udp_discovery {
         socket_.reset();
     }
 
-    void responder::run_loop() {
+    void responder::run_loop() const
+    {
         std::array<uint8_t, 256> recv_buf{};
         while (!stop_flag_.load() && socket_ && socket_->is_open()) {
             udp::endpoint sender_ep;
@@ -246,4 +255,4 @@ namespace udp_discovery {
         }
     }
 
-} // namespace udp_discovery
+}

@@ -6,7 +6,7 @@ namespace ui {
     // Helper for proper text rendering using the app font
     static void DrawTextLayout(const char* text, const int x, const int y, const float size, const Color color) {
         if (IsFontValid(default_font)) {
-            DrawTextEx(default_font, text, { static_cast<float>(x), static_cast<float>(y) }, size, 0.0f, color);
+            DrawTextEx(default_font, text, { .x = static_cast<float>(x), .y = static_cast<float>(y) }, size, 0.0f, color);
         } else {
             DrawText(text, x, y, static_cast<int>(size), color);
         }
@@ -26,7 +26,7 @@ namespace ui {
         DrawRectangleLinesEx(bounds, active ? 2.5f : 1.5f, {.r = 165, .g = 170, .b = 184, .a = 255});
 
         constexpr float text_size = 18.0f;
-        const Vector2 label_size = IsFontValid(default_font) ? MeasureTextEx(default_font, label.c_str(), text_size, 1.0f) : Vector2{ static_cast<float>(MeasureText(label.c_str(), static_cast<int>(text_size))), text_size };
+        const Vector2 label_size = IsFontValid(default_font) ? MeasureTextEx(default_font, label.c_str(), text_size, 1.0f) : Vector2{ .x = static_cast<float>(MeasureText(label.c_str(), static_cast<int>(text_size))), .y = text_size };
 
         DrawTextLayout(label.c_str(),
                  static_cast<int>(bounds.x + (bounds.width - label_size.x) * 0.5f),

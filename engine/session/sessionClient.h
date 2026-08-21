@@ -20,19 +20,16 @@ struct sessionClient
     sessionClient(sessionClient&&) = delete;
     sessionClient& operator=(sessionClient&&) = delete;
 
-    // Returns the assigned session_id on success
     result<bool> send_create(const std::string& name);
     result<bool> send_join(uint32_t session_id, const std::string& name);
     result<bool> send_leave();
     result<bool> send_close_session();
 
-    // Sends a draw operation; member_id is filled in automatically.
     result<bool> send_draw(draw_operation op);
     result<bool> send_draw_raw(const draw_operation& op);
     result<bool> send_canvas_state(const std::vector<draw_operation>& operations);
     result<bool> request_canvas_state();
 
-    // Receives one incoming message; engine handles dispatch.
     [[nodiscard]] result<Message> poll() const;
 
     [[nodiscard]] uint32_t member_id() const noexcept { return member_id_; }

@@ -7,7 +7,6 @@ namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
 #include <chrono>
-#include <boost/asio/async_result.hpp>
 
 tcpSocket::tcpSocket(net::io_context& context)
     : context_(context), resolver_(context), socket_(context)
@@ -28,18 +27,17 @@ tcpSocket::~tcpSocket()
     if (connected_) close();
 }
 
-result<bool> tcpSocket::connect(tcp_addr address, std::chrono::milliseconds timeout)
+result<bool> tcpSocket::connect(tcp_addr address, const std::chrono::milliseconds timeout)
 {
     address_ = std::move(address);
     return connect(timeout);
 }
 
-result<bool> tcpSocket::connect(std::chrono::milliseconds timeout)
+result<bool> tcpSocket::connect(const std::chrono::milliseconds timeout)
 {
     try
     {
         boost::system::error_code ec;
-
         const auto results = resolver_.resolve(address_.host, address_.port, ec);
         if (ec)
             return {.value = false, .err = error::resolve_failed, .message = ec.message()};
@@ -57,7 +55,8 @@ result<bool> tcpSocket::connect(std::chrono::milliseconds timeout)
 
         if (!connect_success)
         {
-            socket_.close(ec);
+            boost::system::error_code close_ec;
+            (void)socket_.close(close_ec);
             std::string msg = connect_ec ? connect_ec.message() : "Connection timed out";
             return {.value = false, .err = error::connect_failed, .message = std::move(msg)};
         }
@@ -121,11 +120,12 @@ result<std::vector<uint8_t>> tcpSocket::receive(const size_t length)
 
     boost::system::error_code ec;
 
-    net::read(
+    const auto read_bytes = net::read(
         socket_,
         net::buffer(buffer),
         ec
     );
+    (void)read_bytes;
 
     if (ec)
     {
@@ -145,11 +145,13 @@ result<std::vector<uint8_t>> tcpSocket::receive(const size_t length)
 
 result<bool> tcpSocket::close()
 {
-    boost::system::error_code ec;
     if (socket_.is_open())
     {
-        socket_.shutdown(tcp::socket::shutdown_both, ec);
-        socket_.close(ec);
+        boost::system::error_code ec;
+        (void)socket_.shutdown(tcp::socket::shutdown_both, ec);
+        
+        boost::system::error_code close_ec;
+        (void)socket_.close(close_ec);
     }
     connected_ = false;
     return {.value = true, .err = error::none, .message = {}};

@@ -3,7 +3,6 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <fstream>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -22,13 +21,14 @@ struct persistence_writer
 
     ~persistence_writer();
 
+    void stop();
     void enqueue(const draw_operation& op);
     [[nodiscard]] bool     healthy()    const noexcept { return !failed_.load(); }
     [[nodiscard]] uint32_t saved_seq()  const noexcept { return saved_seq_.load(); }
 
 private:
     void run();
-    void update_header_seq(std::fstream& file);
+    void update_header_seq(std::fstream& file) const;
 
     std::string             file_path_;
     uint32_t                start_after_seq_;

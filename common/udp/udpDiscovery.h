@@ -1,7 +1,6 @@
 #ifndef SKETCHSYNC_UDP_DISCOVERY_H
 #define SKETCHSYNC_UDP_DISCOVERY_H
 
-#include <cstdint>
 #include <string>
 #include <vector>
 #include <span>
@@ -90,7 +89,7 @@ namespace udp_discovery {
         void stop();
 
     private:
-        void run_loop();
+        void run_loop() const;
 
         net::io_context& io_;
         unsigned short udp_port_;

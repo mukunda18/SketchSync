@@ -1,6 +1,6 @@
 #include "webSocketServer.h"
 
-webSocketServer::webSocketServer(net::io_context& context, unsigned short port)
+webSocketServer::webSocketServer(net::io_context& context, const unsigned short port)
     : acceptor_(context, tcp::endpoint(tcp::v4(), port))
 {}
 
