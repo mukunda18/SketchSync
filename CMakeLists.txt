@@ -92,6 +92,10 @@ add_executable(server
     common/webSocket/webSocketServer.cpp
 )
 
+set_target_properties(engine server PROPERTIES
+    WIN32_EXECUTABLE FALSE
+)
+
 target_link_libraries(engine
     raylib
     ws2_32
