@@ -3,6 +3,7 @@
 #include <charconv>
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 #include <thread>
 
 #include "engine/canvas/canvas.h"
@@ -152,6 +153,7 @@ void session_manager::reset_session()
     in_session_ = false;
     session_id_ = 0;
     member_id_ = 0;
+    members_.clear();
     is_host_ = false;
     joining_state_ = session_joining_state::none;
 }
@@ -223,13 +225,19 @@ void session_manager::broadcast_draw(const draw_operation& op, const bool track_
         in_session = in_session_ || (client && client->in_session());
     }
     if (!client || !in_session)
+    {
+        std::clog << "[DRAW] Local operation ignored: no active session\n";
         return;
+    }
     if (track_pending)
     {
         std::lock_guard lock(pending_mutex_);
         pending_operations_.insert(op.operation_id);
     }
-    client->send_draw(op);
+    if (const auto result = client->send_draw(op); !result)
+        std::clog << "[DRAW] Failed to send operation " << op.operation_id << ": " << result.message << "\n";
+    else
+        std::clog << "[DRAW] Sent operation " << op.operation_id << " from member #" << client->member_id() << "\n";
 }
 
 uint32_t session_manager::member_id_or(const uint32_t fallback) const
@@ -268,6 +276,19 @@ uint32_t session_manager::member_id() const
 {
     std::lock_guard lock(session_mutex_);
     return member_id_;
+}
+
+std::vector<session_member_info> session_manager::members() const
+{
+    std::lock_guard lock(session_mutex_);
+    std::vector<session_member_info> result;
+    result.reserve(members_.size());
+    for (const auto& [id, name] : members_)
+        result.push_back({.id = id, .name = name});
+    std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+        return left.id < right.id;
+    });
+    return result;
 }
 
 std::string& session_manager::session_id_input()
@@ -336,8 +357,25 @@ void session_manager::handle_notification(const std::vector<uint8_t>& payload)
         return;
     switch (payload[0])
     {
-    case notifcode::MEMBER_JOINED: set_status_("A member joined"); break;
-    case notifcode::MEMBER_LEFT: set_status_("A member left"); break;
+    case notifcode::MEMBER_JOINED:
+        if (const auto notification = parseMemberJoinedNotification(payload))
+        {
+            std::lock_guard lock(session_mutex_);
+            members_[notification.value.member_id] = notification.value.name;
+            std::clog << "[SESSION] Member #" << notification.value.member_id
+                      << " joined as " << notification.value.name << "\n";
+        }
+        set_status_("A member joined");
+        break;
+    case notifcode::MEMBER_LEFT:
+        if (const auto notification = parseMemberLeftNotification(payload))
+        {
+            std::lock_guard lock(session_mutex_);
+            members_.erase(notification.value.member_id);
+            std::clog << "[SESSION] Member #" << notification.value.member_id << " left\n";
+        }
+        set_status_("A member left");
+        break;
     case notifcode::SESSION_CLOSED: reset_session(); set_status_("Session closed by host"); break;
     default: break;
     }
@@ -350,6 +388,8 @@ void session_manager::handle_draw(const std::vector<uint8_t>& payload)
         return;
 
     draw_operation op = op_res.value;
+    std::clog << "[DRAW] Received operation " << op.operation_id << " from member #" << op.member_id
+              << " with sequence " << op.seq << "\n";
     {
         std::lock_guard lock(pending_mutex_);
         pending_operations_.erase(op.operation_id);
@@ -370,8 +410,10 @@ void session_manager::handle_draw(const std::vector<uint8_t>& payload)
         if (op.operation_id != 0 && surface_.contains_operation(op.operation_id))
             return;
         op.seq = surface_.apply(op);
+        std::clog << "[DRAW] Host applied operation " << op.operation_id << " as sequence " << op.seq << "\n";
         files_.enqueue_if_auto_save(op);
-        client->send_draw_raw(op);
+        if (const auto result = client->send_draw_raw(op); !result)
+            std::clog << "[DRAW] Failed to return host operation to server: " << result.message << "\n";
     }
     else
     {
@@ -386,6 +428,7 @@ void session_manager::handle_draw(const std::vector<uint8_t>& payload)
         if (op.seq < expected)
             return;
         op.seq = surface_.apply(op);
+        std::clog << "[DRAW] Member applied operation " << op.operation_id << " as sequence " << op.seq << "\n";
         files_.enqueue_if_auto_save(op);
     }
     dirty_.store(true);
@@ -414,6 +457,7 @@ void session_manager::handle_ack(const Message& msg)
             if (client_)
                 client_->set_session_info(ack.value.member_id, ack.value.session_id, true);
             member_id_ = ack.value.member_id;
+            members_[ack.value.member_id] = "SketchSync";
             session_id_ = ack.value.session_id;
             is_host_ = true;
             in_session_ = true;
@@ -430,6 +474,7 @@ void session_manager::handle_ack(const Message& msg)
             if (client_)
                 client_->set_session_info(ack.value.member_id, session_id_, false);
             member_id_ = ack.value.member_id;
+            members_[ack.value.member_id] = "SketchSync";
             is_host_ = false;
             in_session_ = true;
             joining_state_ = session_joining_state::in_session;

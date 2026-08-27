@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -17,6 +18,12 @@ struct canvas;
 struct file_manager;
 struct network_manager;
 struct sessionClient;
+
+struct session_member_info
+{
+    uint32_t id;
+    std::string name;
+};
 
 enum class session_joining_state {
     none,
@@ -63,6 +70,7 @@ struct session_manager
     [[nodiscard]] bool is_host() const;
     [[nodiscard]] uint32_t session_id() const;
     [[nodiscard]] uint32_t member_id() const;
+    [[nodiscard]] std::vector<session_member_info> members() const;
     std::string& session_id_input();
 
     uint64_t next_operation_id();
@@ -86,6 +94,7 @@ private:
 
     uint32_t session_id_ = 0;
     uint32_t member_id_ = 0;
+    std::unordered_map<uint32_t, std::string> members_;
     bool is_host_ = false;
     bool in_session_ = false;
     std::string session_id_input_;

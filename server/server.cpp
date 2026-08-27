@@ -245,6 +245,36 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             register_connection(ctx.member_id, &conn);
             std::clog << "[TCP] JOIN accepted: session #" << session_id
                       << ", member #" << ctx.member_id << "; sending ACK\n";
+            std::vector<member> existing_members;
+            {
+                std::lock_guard sessions_lock(sessions_mutex);
+                const auto session_it = sessions.find(session_id);
+                if (session_it != sessions.end())
+                {
+                    std::lock_guard members_lock(session_it->second.members_mutex);
+                    existing_members.reserve(session_it->second.members.size());
+                    for (const auto& [id, session_member] : session_it->second.members)
+                        existing_members.push_back(session_member);
+                }
+            }
+            for (const auto& session_member : existing_members)
+            {
+                const auto member_payload = serializeMemberJoinedNotification({
+                    .notif_code = notifcode::MEMBER_JOINED,
+                    .member_id = session_member.id,
+                    .name = session_member.name
+                });
+                conn.send(serializeMessage({
+                    .header = Header{
+                        .opcode = Opcode::NOTIFICATION,
+                        .flags = 0,
+                        .length = static_cast<uint32_t>(member_payload.size())
+                    },
+                    .payload = member_payload
+                }));
+                std::clog << "[SESSION] Sent member #" << session_member.id
+                          << " to joining member #" << ctx.member_id << "\n";
+            }
             {
                 const auto ack_payload = serializeJoinAckMessage({
                     .ack_code = ackcode::JOIN_OK,
@@ -603,6 +633,7 @@ void server::handle_draw(const std::span<const uint8_t> payload, const clientCon
     }
 
     draw_operation op = std::move(op_res.value);
+    std::clog << "[DRAW] Received operation " << op.operation_id << " from member #" << ctx.member_id << "\n";
 
     std::lock_guard lock(sessions_mutex);
     const auto it = sessions.find(ctx.session_id);
@@ -630,6 +661,9 @@ void server::handle_draw(const std::span<const uint8_t> payload, const clientCon
             return;
         }
 
+        std::clog << "[DRAW] Forwarding operation " << op.operation_id << " from member #"
+              << ctx.member_id << " to host #" << sess.host_id << "\n";
+
         const auto forwarded_payload = serializeDrawOperation(op);
         const Message forwarded{
             .header = Header{
@@ -650,6 +684,8 @@ void server::handle_draw(const std::span<const uint8_t> payload, const clientCon
     }
 
     const auto draw_payload = serializeDrawOperation(op);
+    std::clog << "[DRAW] Broadcasting host operation " << op.operation_id
+              << " as sequence " << op.seq << " from member #" << ctx.member_id << "\n";
     sendNotification(sess, Opcode::DRAW, draw_payload, ctx.member_id);
 
 }

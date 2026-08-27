@@ -337,6 +337,7 @@ int sketch_app::run()
             session_.in_session(),
             session_.session_id(),
             session_.member_id(),
+            session_.members(),
             get_status(),
             files_.current_file(),
             is_running,
