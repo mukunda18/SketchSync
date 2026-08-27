@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #include "engine/canvas/canvas.h"
@@ -49,12 +50,16 @@ void session_manager::join_session()
 
     if (net_.connected() && has_client())
     {
+        std::clog << "[TCP] Existing connection found; sending JOIN request for session #" << session_id << "\n";
         send_join_request(session_id);
         return;
     }
 
     if (net_.protocol() == connection_protocol::tcp)
+    {
+        std::clog << "[TCP] Join requested for session #" << session_id << "\n";
         net_.async_tcp_discover_and_join(session_id);
+    }
     else
         net_.async_ws_connect_and_join(session_id);
 }
@@ -79,7 +84,10 @@ void session_manager::create_session()
     if (net_.protocol() == connection_protocol::websocket)
         net_.async_ws_connect_and_create();
     else
+    {
+        std::clog << "[TCP] Create requested, but TCP session creation is not supported\n";
         set_status_("Start Local server to host locally, or Join a session");
+    }
 }
 
 void session_manager::prepare_join(const uint32_t session_id)
@@ -99,14 +107,19 @@ void session_manager::send_join_request(const uint32_t session_id)
 {
     std::lock_guard lock(session_mutex_);
     if (!client_)
+    {
+        std::clog << "[TCP] Cannot send JOIN: no session client\n";
         return;
+    }
     if (const auto res = client_->send_join(session_id, "SketchSync"); !res)
     {
+        std::clog << "[TCP] JOIN send failed for session #" << session_id << ": " << res.message << "\n";
         set_status_(res.message);
         return;
     }
     joining_state_ = session_joining_state::joining;
     session_id_ = session_id;
+    std::clog << "[TCP] JOIN request sent for session #" << session_id << "; waiting for ACK\n";
     set_status_("Joining session #" + std::to_string(session_id) + "...");
 }
 
@@ -287,6 +300,7 @@ void session_manager::poll_session()
         {
             if (!net_.stop_requested())
             {
+                std::clog << "[TCP] Session receive failed: " << msg_res.message << "\n";
                 set_status_(std::string("Disconnected: ") + msg_res.message);
                 reset_session();
                 net_.set_disconnected();
@@ -299,8 +313,14 @@ void session_manager::poll_session()
         case Opcode::NOTIFICATION: handle_notification(msg.payload); break;
         case Opcode::DRAW: handle_draw(msg.payload); break;
         case Opcode::CANVAS_STATE: handle_canvas_state(msg.payload); break;
-        case Opcode::ACK: handle_ack(msg); break;
-        case Opcode::ERROR_MSG: handle_error(msg.payload); break;
+        case Opcode::ACK:
+            std::clog << "[TCP] ACK received while joining state is " << static_cast<int>(joining_state_) << "\n";
+            handle_ack(msg);
+            break;
+        case Opcode::ERROR_MSG:
+            std::clog << "[TCP] ERROR received from server\n";
+            handle_error(msg.payload);
+            break;
         case Opcode::CANVAS_STATE_REQUEST:
             if (client->is_host())
                 client->send_canvas_state(surface_.snapshot());
@@ -406,6 +426,7 @@ void session_manager::handle_ack(const Message& msg)
     {
         if (const auto ack = parseJoinAckMessage(msg.payload); ack && ack.value.ack_code == ackcode::JOIN_OK)
         {
+            std::clog << "[TCP] JOIN accepted; assigned member #" << ack.value.member_id << "\n";
             if (client_)
                 client_->set_session_info(ack.value.member_id, session_id_, false);
             member_id_ = ack.value.member_id;
@@ -415,6 +436,10 @@ void session_manager::handle_ack(const Message& msg)
             if (client_)
                 client_->request_canvas_state();
             set_status_("Joined session #" + std::to_string(session_id_));
+        }
+        else
+        {
+            std::clog << "[TCP] JOIN ACK was malformed or rejected\n";
         }
         break;
     }

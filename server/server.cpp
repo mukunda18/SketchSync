@@ -1,5 +1,6 @@
 #include "server.h"
 #include "common/protocol/message.h"
+#include <iostream>
 #include <ranges>
 
 server::server(
@@ -104,6 +105,7 @@ void server::run_ws_accept_loop()
 
 void server::handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket raw_socket)
 {
+    std::clog << "[TCP] Client connected\n";
     tcpSocket client(std::move(raw_socket), io_);
     clientContext ctx;
     clientConnection conn{.tcp = &client};
@@ -119,6 +121,8 @@ void server::handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket r
             break;
 
         Header header = parse_result.value;
+        std::clog << "[TCP] Received opcode 0x" << std::hex << static_cast<int>(header.opcode)
+              << std::dec << " with payload length " << header.length << "\n";
 
         auto payload_result = client.receive(header.length);
         if (!payload_result)
@@ -134,6 +138,7 @@ void server::handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket r
         unregister_connection(ctx.member_id);
         handle_leave(ctx);
     }
+    std::clog << "[TCP] Client disconnected\n";
 }
 
 void server::handle_ws_client(const std::atomic<bool>& stop_flag, websocket_beast::stream<tcp::socket> raw_ws)
@@ -182,6 +187,7 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
     {
     case Opcode::CREATE:
         {
+            std::clog << "[TCP] Processing CREATE request\n";
             const result<std::string> parse_result = parseCreateMessage(payload);
             if (!parse_result)
             {
@@ -199,6 +205,8 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             }
 
             register_connection(ctx.member_id, &conn);
+            std::clog << "[TCP] CREATE accepted: session #" << ctx.session_id
+                      << ", member #" << ctx.member_id << "\n";
             {
                 const auto ack_payload = serializeCreateAckMessage({
                     .ack_code = ackcode::CREATE_OK,
@@ -217,9 +225,11 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
         }
     case Opcode::JOIN:
         {
+            std::clog << "[TCP] Processing JOIN request\n";
             result<JoinMessage> parse_result = parseJoinMessage(payload);
             if (!parse_result)
             {
+                std::clog << "[TCP] JOIN parse failed: " << parse_result.message << "\n";
                 sendError(conn, errcode::JOIN_FAILED, parse_result.message);
                 break;
             }
@@ -227,11 +237,14 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             const auto [session_id, name] = parse_result.value;
             if (const auto result = handle_join(session_id, name, ctx); !result)
             {
+                std::clog << "[TCP] JOIN rejected for session #" << session_id << ": " << result.message << "\n";
                 sendError(conn, errcode::JOIN_FAILED, result.message);
                 break;
             }
 
             register_connection(ctx.member_id, &conn);
+            std::clog << "[TCP] JOIN accepted: session #" << session_id
+                      << ", member #" << ctx.member_id << "; sending ACK\n";
             {
                 const auto ack_payload = serializeJoinAckMessage({
                     .ack_code = ackcode::JOIN_OK,
@@ -337,8 +350,10 @@ result<bool> server::handle_join(const uint32_t session_id, const std::string& n
     new_member.role = member_role::participant;
     new_member.session_id = session_id;
 
-    std::lock_guard members_lock(sess.members_mutex);
-    sess.members.emplace(member_id, new_member);
+    {
+        std::lock_guard members_lock(sess.members_mutex);
+        sess.members.emplace(member_id, new_member);
+    }
 
     ctx.member_id = member_id;
     ctx.session_id = session_id;

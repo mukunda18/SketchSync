@@ -158,6 +158,8 @@ namespace udp_discovery {
             }
 
             const auto req_data = udp_proto::serializeDiscoverMessage({.session_id = session_id});
+            std::clog << "[UDP] Sending discovery request for session #" << session_id
+                      << " on port " << udp_port << "\n";
 
             // Send discover request on LAN broadcast
             udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
@@ -198,6 +200,8 @@ namespace udp_discovery {
                         host_ip = "127.0.0.1";
                     }
                     host_port = offer_res.value.tcp_port;
+                    std::clog << "[UDP] Received offer for session #" << session_id
+                              << " from " << host_ip << ":" << host_port << "\n";
                     (void)timer.cancel();
                     boost::system::error_code socket_close_ec;
                     (void)socket.close(socket_close_ec);
@@ -295,8 +299,12 @@ namespace udp_discovery {
             const auto req = udp_proto::parseDiscoverMessage(std::span<const uint8_t>(recv_buf.data(), bytes));
             if (!req) continue;
 
+            std::clog << "[UDP] Received discovery request for session #" << req.value.session_id << "\n";
+
             if (lookup_) {
                 if (const auto tcp_p = lookup_(req.value.session_id); tcp_p.has_value()) {
+                    std::clog << "[UDP] Sending offer for session #" << req.value.session_id
+                              << " with TCP port " << *tcp_p << "\n";
                     const auto offer_bytes = udp_proto::serializeOfferMessage({
                         .session_id = req.value.session_id,
                         .tcp_port = *tcp_p
