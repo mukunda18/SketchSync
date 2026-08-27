@@ -246,29 +246,42 @@ namespace udp_discovery {
         if (socket_ && socket_->is_open()) return;
 
         stop_flag_.store(false);
+        std::clog << "[UDP] Starting discovery responder on port " << udp_port_ << "\n";
         try {
             socket_ = std::make_unique<udp::socket>(io_);
             const udp::endpoint listen_ep(udp::v4(), udp_port_);
             boost::system::error_code ec;
 
             (void)socket_->open(listen_ep.protocol(), ec);
-            if (ec) return;
+            if (ec) {
+                std::clog << "[UDP] Failed to open responder socket: " << ec.message() << "\n";
+                return;
+            }
 
             (void)socket_->set_option(boost::asio::socket_base::reuse_address(true), ec);
-            if (ec) return;
+            if (ec) {
+                std::clog << "[UDP] Failed to set reuse address: " << ec.message() << "\n";
+                return;
+            }
             (void)socket_->set_option(boost::asio::socket_base::broadcast(true), ec);
-            if (ec) return;
+            if (ec) {
+                std::clog << "[UDP] Failed to set broadcast: " << ec.message() << "\n";
+                return;
+            }
 
             (void)socket_->bind(listen_ep, ec);
             if (ec) {
+                std::clog << "[UDP] Failed to bind responder on port " << udp_port_
+                          << ": " << ec.message() << "\n";
                 boost::system::error_code bind_close_ec;
                 (void)socket_->close(bind_close_ec);
                 return;
             }
 
             worker_ = std::thread(&responder::run_loop, this);
+            std::clog << "[UDP] Discovery responder ready on port " << udp_port_ << "\n";
         } catch (...) {
-            // Ignore startup failures gracefully
+            std::clog << "[UDP] Discovery responder failed with an unknown error\n";
         }
     }
 
@@ -297,7 +310,10 @@ namespace udp_discovery {
             }
 
             const auto req = udp_proto::parseDiscoverMessage(std::span<const uint8_t>(recv_buf.data(), bytes));
-            if (!req) continue;
+            if (!req) {
+                std::clog << "[UDP] Ignoring malformed discovery request: " << req.message << "\n";
+                continue;
+            }
 
             std::clog << "[UDP] Received discovery request for session #" << req.value.session_id << "\n";
 
@@ -309,7 +325,12 @@ namespace udp_discovery {
                         .session_id = req.value.session_id,
                         .tcp_port = *tcp_p
                     });
-                    socket_->send_to(net::buffer(offer_bytes), sender_ep, 0, ec);
+                    (void)socket_->send_to(net::buffer(offer_bytes), sender_ep, 0, ec);
+                    if (ec)
+                        std::clog << "[UDP] Failed to send offer: " << ec.message() << "\n";
+                }
+                else {
+                    std::clog << "[UDP] No open session #" << req.value.session_id << "\n";
                 }
             }
         }

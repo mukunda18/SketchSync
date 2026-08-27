@@ -46,6 +46,8 @@ int main(const int argc, char* argv[])
         }
 
         net::io_context io;
+        std::clog << "Starting server with TCP " << tcp_port << ", WebSocket "
+              << ws_port << ", UDP discovery " << udp_port << "\n";
         server srv(io, ws_port, tcp_port, udp_port);
         srv.run();
 

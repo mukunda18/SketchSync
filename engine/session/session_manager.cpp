@@ -85,10 +85,7 @@ void session_manager::create_session()
     if (net_.protocol() == connection_protocol::websocket)
         net_.async_ws_connect_and_create();
     else
-    {
-        std::clog << "[TCP] Create requested, but TCP session creation is not supported\n";
         set_status_("Start Local server to host locally, or Join a session");
-    }
 }
 
 void session_manager::prepare_join(const uint32_t session_id)
