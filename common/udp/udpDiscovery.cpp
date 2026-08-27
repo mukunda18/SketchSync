@@ -158,25 +158,6 @@ namespace udp_discovery {
             }
 
             const auto req_data = udp_proto::serializeDiscoverMessage({.session_id = session_id});
-            std::clog << "[UDP] Sending discovery request for session #" << session_id
-                      << " on port " << udp_port << "\n";
-
-            // Send discover request on LAN broadcast
-            udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
-            const auto send_bcast_res = socket.send_to(net::buffer(req_data), broadcast_ep, 0, ec);
-            (void)send_bcast_res;  // Ignore send result; continue on network errors
-
-#ifdef _WIN32
-            // Mobile hotspots often do not route 255.255.255.255 to the hotspot adapter.
-            for (const auto& directed_ep : directed_broadcast_endpoints(udp_port))
-                (void)socket.send_to(net::buffer(req_data), directed_ep, 0, ec);
-#endif
-
-            // Also send directly to localhost loopback for same-machine testing
-            udp::endpoint loopback_ep(boost::asio::ip::address_v4::loopback(), udp_port);
-            const auto send_loopback_res = socket.send_to(net::buffer(req_data), loopback_ep, 0, ec);
-            (void)send_loopback_res;  // Ignore send result; continue on network errors
-
             std::array<uint8_t, 256> recv_buf{};
             udp::endpoint sender_ep;
             bool found = false;
@@ -220,6 +201,25 @@ namespace udp_discovery {
                     (void)socket.close(close_ec);
                 }
             });
+
+            std::clog << "[UDP] Sending discovery request for session #" << session_id
+                      << " on port " << udp_port << "\n";
+
+            // Send discover request on LAN broadcast
+            udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
+            const auto send_bcast_res = socket.send_to(net::buffer(req_data), broadcast_ep, 0, ec);
+            (void)send_bcast_res;  // Ignore send result; continue on network errors
+
+#ifdef _WIN32
+            // Mobile hotspots often do not route 255.255.255.255 to the hotspot adapter.
+            for (const auto& directed_ep : directed_broadcast_endpoints(udp_port))
+                (void)socket.send_to(net::buffer(req_data), directed_ep, 0, ec);
+#endif
+
+            // Also send directly to localhost loopback for same-machine testing
+            udp::endpoint loopback_ep(boost::asio::ip::address_v4::loopback(), udp_port);
+            const auto send_loopback_res = socket.send_to(net::buffer(req_data), loopback_ep, 0, ec);
+            (void)send_loopback_res;  // Ignore send result; continue on network errors
 
             io.run();
 
