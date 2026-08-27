@@ -3,6 +3,11 @@
 #include <boost/asio/steady_timer.hpp>
 #include <cstring>
 #include <iostream>
+#include <set>
+
+#ifdef _WIN32
+#include <iphlpapi.h>
+#endif
 
 namespace udp_proto {
 
@@ -86,6 +91,47 @@ namespace udp_proto {
 
 namespace udp_discovery {
 
+#ifdef _WIN32
+    std::vector<udp::endpoint> directed_broadcast_endpoints(const unsigned short udp_port)
+    {
+        ULONG buffer_size = 0;
+        if (GetAdaptersAddresses(AF_INET, 0, nullptr, nullptr, &buffer_size) != ERROR_BUFFER_OVERFLOW)
+            return {};
+
+        std::vector<uint8_t> buffer(buffer_size);
+        auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        if (GetAdaptersAddresses(AF_INET, 0, nullptr, adapters, &buffer_size) != NO_ERROR)
+            return {};
+
+        std::set<std::string> addresses;
+        for (auto* adapter = adapters; adapter; adapter = adapter->Next)
+        {
+            if (adapter->OperStatus != IfOperStatusUp)
+                continue;
+
+            for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next)
+            {
+                if (!unicast->Address.lpSockaddr || unicast->Address.lpSockaddr->sa_family != AF_INET)
+                    continue;
+
+                const auto* address = reinterpret_cast<const sockaddr_in*>(unicast->Address.lpSockaddr);
+                const uint32_t host_address = ntohl(address->sin_addr.S_un.S_addr);
+                const uint32_t host_mask = unicast->OnLinkPrefixLength == 32
+                    ? 0xffffffffu
+                    : 0xffffffffu << (32 - unicast->OnLinkPrefixLength);
+                const auto broadcast = net::ip::address_v4(host_address | ~host_mask).to_string();
+                if (broadcast != "127.255.255.255")
+                    addresses.insert(broadcast);
+            }
+        }
+
+        std::vector<udp::endpoint> endpoints;
+        for (const auto& address : addresses)
+            endpoints.emplace_back(net::ip::make_address_v4(address), udp_port);
+        return endpoints;
+    }
+#endif
+
     result<std::pair<std::string, uint16_t>> discover_host(
         const uint32_t session_id,
         const std::chrono::milliseconds timeout,
@@ -117,6 +163,12 @@ namespace udp_discovery {
             udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
             const auto send_bcast_res = socket.send_to(net::buffer(req_data), broadcast_ep, 0, ec);
             (void)send_bcast_res;  // Ignore send result; continue on network errors
+
+#ifdef _WIN32
+            // Mobile hotspots often do not route 255.255.255.255 to the hotspot adapter.
+            for (const auto& directed_ep : directed_broadcast_endpoints(udp_port))
+                (void)socket.send_to(net::buffer(req_data), directed_ep, 0, ec);
+#endif
 
             // Also send directly to localhost loopback for same-machine testing
             udp::endpoint loopback_ep(boost::asio::ip::address_v4::loopback(), udp_port);

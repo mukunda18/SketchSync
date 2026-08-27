@@ -48,7 +48,8 @@ namespace ui
         ofn.lpstrFilter = "SketchSync files (*.sketchsync)\0*.sketchsync\0All files\0*.*\0";
         ofn.nFilterIndex = 1;
         ofn.lpstrDefExt = "sketchsync";
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY |
+                OFN_NOVALIDATE | OFN_NOCHANGEDIR;
 
         if (GetSaveFileNameA(&ofn) != 0)
             return std::filesystem::path(file_name);

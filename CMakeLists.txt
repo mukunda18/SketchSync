@@ -101,6 +101,7 @@ target_link_libraries(engine
     opengl32
     shell32
     user32
+    iphlpapi
 )
 
 target_compile_definitions(engine PRIVATE
@@ -111,6 +112,7 @@ target_compile_definitions(engine PRIVATE
 
 target_link_libraries(server
     ws2_32
+    iphlpapi
 )
 
 target_compile_definitions(server PRIVATE

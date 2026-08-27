@@ -6,18 +6,18 @@
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/common",
                 "${workspaceFolder}/engine",
-                "${workspaceFolder}/server"
+                "${workspaceFolder}/server",
+                "C:/msys64/ucrt64/include"
             ],
             "defines": [
                 "_DEBUG",
                 "UNICODE",
                 "_UNICODE"
             ],
-            "compilerPath": "cl.exe",
+            "compilerPath": "C:/mingw64/bin/g++.exe",
             "cStandard": "c17",
             "cppStandard": "c++20",
-            "intelliSenseMode": "windows-msvc-x64",
-            "configurationProvider": "ms-vscode.cmake-tools"
+            "intelliSenseMode": "windows-gcc-x64"
         }
     ],
     "version": 4
