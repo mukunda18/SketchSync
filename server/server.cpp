@@ -1,5 +1,6 @@
 #include "server.h"
 #include "common/protocol/message.h"
+#include <iostream>
 #include <ranges>
 
 server::server(
@@ -104,6 +105,7 @@ void server::run_ws_accept_loop()
 
 void server::handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket raw_socket)
 {
+    std::clog << "[TCP] Client connected\n";
     tcpSocket client(std::move(raw_socket), io_);
     clientContext ctx;
     clientConnection conn{.tcp = &client};
@@ -119,6 +121,8 @@ void server::handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket r
             break;
 
         Header header = parse_result.value;
+        std::clog << "[TCP] Received opcode 0x" << std::hex << static_cast<int>(header.opcode)
+              << std::dec << " with payload length " << header.length << "\n";
 
         auto payload_result = client.receive(header.length);
         if (!payload_result)
@@ -134,6 +138,7 @@ void server::handle_tcp_client(const std::atomic<bool>& stop_flag, tcp::socket r
         unregister_connection(ctx.member_id);
         handle_leave(ctx);
     }
+    std::clog << "[TCP] Client disconnected\n";
 }
 
 void server::handle_ws_client(const std::atomic<bool>& stop_flag, websocket_beast::stream<tcp::socket> raw_ws)
@@ -182,6 +187,7 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
     {
     case Opcode::CREATE:
         {
+            std::clog << "[TCP] Processing CREATE request\n";
             const result<std::string> parse_result = parseCreateMessage(payload);
             if (!parse_result)
             {
@@ -199,6 +205,8 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             }
 
             register_connection(ctx.member_id, &conn);
+            std::clog << "[TCP] CREATE accepted: session #" << ctx.session_id
+                      << ", member #" << ctx.member_id << "\n";
             {
                 const auto ack_payload = serializeCreateAckMessage({
                     .ack_code = ackcode::CREATE_OK,
@@ -217,9 +225,11 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
         }
     case Opcode::JOIN:
         {
+            std::clog << "[TCP] Processing JOIN request\n";
             result<JoinMessage> parse_result = parseJoinMessage(payload);
             if (!parse_result)
             {
+                std::clog << "[TCP] JOIN parse failed: " << parse_result.message << "\n";
                 sendError(conn, errcode::JOIN_FAILED, parse_result.message);
                 break;
             }
@@ -227,11 +237,44 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             const auto [session_id, name] = parse_result.value;
             if (const auto result = handle_join(session_id, name, ctx); !result)
             {
+                std::clog << "[TCP] JOIN rejected for session #" << session_id << ": " << result.message << "\n";
                 sendError(conn, errcode::JOIN_FAILED, result.message);
                 break;
             }
 
             register_connection(ctx.member_id, &conn);
+            std::clog << "[TCP] JOIN accepted: session #" << session_id
+                      << ", member #" << ctx.member_id << "; sending ACK\n";
+            std::vector<member> existing_members;
+            {
+                std::lock_guard sessions_lock(sessions_mutex);
+                const auto session_it = sessions.find(session_id);
+                if (session_it != sessions.end())
+                {
+                    std::lock_guard members_lock(session_it->second.members_mutex);
+                    existing_members.reserve(session_it->second.members.size());
+                    for (const auto& [id, session_member] : session_it->second.members)
+                        existing_members.push_back(session_member);
+                }
+            }
+            for (const auto& session_member : existing_members)
+            {
+                const auto member_payload = serializeMemberJoinedNotification({
+                    .notif_code = notifcode::MEMBER_JOINED,
+                    .member_id = session_member.id,
+                    .name = session_member.name
+                });
+                conn.send(serializeMessage({
+                    .header = Header{
+                        .opcode = Opcode::NOTIFICATION,
+                        .flags = 0,
+                        .length = static_cast<uint32_t>(member_payload.size())
+                    },
+                    .payload = member_payload
+                }));
+                std::clog << "[SESSION] Sent member #" << session_member.id
+                          << " to joining member #" << ctx.member_id << "\n";
+            }
             {
                 const auto ack_payload = serializeJoinAckMessage({
                     .ack_code = ackcode::JOIN_OK,
@@ -276,6 +319,38 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
     case Opcode::DRAW:
         {
             handle_draw(payload, ctx, conn);
+            break;
+        }
+    case Opcode::CANVAS_CLEAR:
+        {
+            if (ctx.member_id == 0 || ctx.session_id == 0)
+            {
+                sendError(conn, errcode::UNKNOWN, "not in a session");
+                break;
+            }
+            std::lock_guard lock(sessions_mutex);
+            const auto it = sessions.find(ctx.session_id);
+            if (it == sessions.end())
+            {
+                sendError(conn, errcode::UNKNOWN, "session not found");
+                break;
+            }
+            std::clog << "[DRAW] Broadcasting canvas clear from member #" << ctx.member_id << "\n";
+            const Message clear_message{
+                .header = Header{.opcode = Opcode::CANVAS_CLEAR, .flags = 0, .length = 0},
+                .payload = {}
+            };
+            const auto clear_data = serializeMessage(clear_message);
+            const auto& sess = it->second;
+            std::vector<uint32_t> ids;
+            {
+                std::lock_guard members_lock(sess.members_mutex);
+                for (const auto& [id, session_member] : sess.members)
+                    ids.push_back(id);
+            }
+            for (const auto id : ids)
+                if (auto* member_connection = find_connection(id))
+                    member_connection->send(clear_data);
             break;
         }
     default:
@@ -337,8 +412,10 @@ result<bool> server::handle_join(const uint32_t session_id, const std::string& n
     new_member.role = member_role::participant;
     new_member.session_id = session_id;
 
-    std::lock_guard members_lock(sess.members_mutex);
-    sess.members.emplace(member_id, new_member);
+    {
+        std::lock_guard members_lock(sess.members_mutex);
+        sess.members.emplace(member_id, new_member);
+    }
 
     ctx.member_id = member_id;
     ctx.session_id = session_id;
@@ -588,6 +665,7 @@ void server::handle_draw(const std::span<const uint8_t> payload, const clientCon
     }
 
     draw_operation op = std::move(op_res.value);
+    std::clog << "[DRAW] Received operation " << op.operation_id << " from member #" << ctx.member_id << "\n";
 
     std::lock_guard lock(sessions_mutex);
     const auto it = sessions.find(ctx.session_id);
@@ -615,6 +693,9 @@ void server::handle_draw(const std::span<const uint8_t> payload, const clientCon
             return;
         }
 
+        std::clog << "[DRAW] Forwarding operation " << op.operation_id << " from member #"
+              << ctx.member_id << " to host #" << sess.host_id << "\n";
+
         const auto forwarded_payload = serializeDrawOperation(op);
         const Message forwarded{
             .header = Header{
@@ -635,6 +716,8 @@ void server::handle_draw(const std::span<const uint8_t> payload, const clientCon
     }
 
     const auto draw_payload = serializeDrawOperation(op);
+    std::clog << "[DRAW] Broadcasting host operation " << op.operation_id
+              << " as sequence " << op.seq << " from member #" << ctx.member_id << "\n";
     sendNotification(sess, Opcode::DRAW, draw_payload, ctx.member_id);
 
 }

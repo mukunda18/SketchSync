@@ -32,6 +32,7 @@ struct canvas
     [[nodiscard]] bool contains_operation(uint64_t operation_id) const;
     [[nodiscard]] uint32_t next_sequence() const noexcept { return next_seq.load(); }
     void create(uint32_t new_width, uint32_t new_height, uint32_t background = 0xFFFFFFFF);
+    void clear_history();
     uint32_t apply(draw_operation op);
     void load(const std::vector<draw_operation>& ops);
 

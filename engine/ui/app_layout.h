@@ -4,6 +4,7 @@
 #include "components.h"
 #include "engine/network/connection_types.h"
 #include "common/canvas/draw_operation.h"
+#include "engine/session/session_manager.h"
 #include <cstdint>
 #include <string>
 
@@ -54,6 +55,7 @@ namespace ui {
                   bool in_session,
                   uint32_t session_id,
                   uint32_t member_id,
+                  const std::vector<session_member_info>& members,
                   const std::string& status,
                   const std::string& current_file,
                   bool server_running,

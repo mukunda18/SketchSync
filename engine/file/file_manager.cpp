@@ -2,6 +2,7 @@
 
 #include <array>
 #include <fstream>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -41,16 +42,22 @@ void file_manager::open_and_load()
 
 void file_manager::save_to_file(const std::filesystem::path& path)
 {
+    std::filesystem::path save_path = path;
+    if (save_path.extension() != ".sketchsync")
+        save_path += ".sketchsync";
+
     const bool was_auto_save = auto_save_on_;
     if (was_auto_save)
         close_auto_save();
 
-    std::ofstream file(path, std::ios::binary);
+    std::ofstream file(save_path, std::ios::binary);
     if (!file.is_open())
     {
-        set_status_("Failed to save file");
+        std::error_code ec;
+        const auto absolute_path = std::filesystem::absolute(save_path, ec);
+        set_status_("Failed to save " + (ec ? save_path.string() : absolute_path.string()));
         if (was_auto_save)
-            operation_log_ = std::make_unique<persistence_writer>(path.string(), file_saved_seq_);
+            operation_log_ = std::make_unique<persistence_writer>(save_path.string(), file_saved_seq_);
         return;
     }
 
@@ -89,11 +96,11 @@ void file_manager::save_to_file(const std::filesystem::path& path)
     file.close();
 
     file_saved_seq_ = max_seq;
-    current_file_ = path.string();
+    current_file_ = save_path.string();
     set_status_("Saved canvas state");
 
     if (was_auto_save)
-        operation_log_ = std::make_unique<persistence_writer>(path.string(), file_saved_seq_);
+        operation_log_ = std::make_unique<persistence_writer>(save_path.string(), file_saved_seq_);
 }
 
 void file_manager::save_as()

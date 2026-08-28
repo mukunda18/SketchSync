@@ -92,6 +92,10 @@ add_executable(server
     common/webSocket/webSocketServer.cpp
 )
 
+set_target_properties(engine server PROPERTIES
+    WIN32_EXECUTABLE FALSE
+)
+
 target_link_libraries(engine
     raylib
     ws2_32
@@ -101,6 +105,7 @@ target_link_libraries(engine
     opengl32
     shell32
     user32
+    iphlpapi
 )
 
 target_compile_definitions(engine PRIVATE
@@ -111,6 +116,7 @@ target_compile_definitions(engine PRIVATE
 
 target_link_libraries(server
     ws2_32
+    iphlpapi
 )
 
 target_compile_definitions(server PRIVATE

@@ -1,6 +1,7 @@
 #include "engine/network/network_manager.h"
 
 #include <exception>
+#include <iostream>
 #include <utility>
 
 #include "common/udp/udpDiscovery.h"
@@ -120,10 +121,14 @@ void network_manager::async_connect_to_server()
 void network_manager::async_tcp_discover_and_join(const uint32_t session_id)
 {
     if (connecting_.exchange(true))
+    {
+        std::clog << "[TCP] Join ignored: another connection attempt is active\n";
         return;
+    }
 
     stop_poll_.store(false);
     stop_connect_thread();
+    std::clog << "[TCP] Starting discovery for session #" << session_id << "\n";
     set_status_("Discovering host for session #" + std::to_string(session_id) + " via UDP...");
     {
         std::lock_guard lock(mutex_);
@@ -138,6 +143,7 @@ void network_manager::async_tcp_discover_and_join(const uint32_t session_id)
             const auto disc = udp_discovery::discover_host(session_id, std::chrono::milliseconds(3000));
             if (!disc)
             {
+                std::clog << "[TCP] Discovery failed for session #" << session_id << ": " << disc.message << "\n";
                 if (!stop_poll_.load())
                     set_status_("UDP Discovery failed: " + disc.message);
                 finish_connect_attempt(true);
@@ -145,6 +151,7 @@ void network_manager::async_tcp_discover_and_join(const uint32_t session_id)
             }
 
             const auto& [host_ip, tcp_port] = disc.value;
+            std::clog << "[TCP] Discovery found host " << host_ip << ":" << tcp_port << "\n";
             set_endpoint(host_ip, std::to_string(tcp_port), connection_protocol::tcp);
 
             if (!stop_poll_.load())
@@ -152,6 +159,7 @@ void network_manager::async_tcp_discover_and_join(const uint32_t session_id)
 
             if (const auto res = connect_to_server(); !res)
             {
+                std::clog << "[TCP] Connection failed: " << res.message << "\n";
                 if (!stop_poll_.load())
                     set_status_("TCP connection failed: " + res.message);
                 finish_connect_attempt(true);
@@ -162,15 +170,20 @@ void network_manager::async_tcp_discover_and_join(const uint32_t session_id)
                 set_status_("Joining session #" + std::to_string(session_id) + "...");
 
             if (session_)
+            {
+                std::clog << "[TCP] Sending JOIN request for session #" << session_id << "\n";
                 session_->send_join_request(session_id);
+            }
         }
         catch (const std::exception& ex)
         {
+            std::clog << "[TCP] Join exception: " << ex.what() << "\n";
             if (!stop_poll_.load())
                 set_status_("Discovery error: " + std::string(ex.what()));
         }
         catch (...)
         {
+            std::clog << "[TCP] Join failed with an unknown exception\n";
             if (!stop_poll_.load())
                 set_status_("Discovery error");
         }
@@ -396,6 +409,7 @@ result<bool> network_manager::connect_to_server(const std::chrono::milliseconds 
 
     if (proto == connection_protocol::tcp)
     {
+        std::clog << "[TCP] Connecting to " << host << ":" << port << "\n";
         new_tcp = std::make_unique<tcpSocket>(tcp_addr{.host = host, .port = port}, *new_io);
         conn_res = new_tcp->connect(timeout);
     }
@@ -407,6 +421,8 @@ result<bool> network_manager::connect_to_server(const std::chrono::milliseconds 
 
     if (!conn_res || stop_poll_.load())
     {
+        if (!conn_res)
+            std::clog << "[TCP] Connect result: failed: " << conn_res.message << "\n";
         finish_connect_io();
         return conn_res;
     }
@@ -443,6 +459,8 @@ result<bool> network_manager::connect_to_server(const std::chrono::milliseconds 
     }
 
     finish_connect_io();
+    if (proto == connection_protocol::tcp)
+        std::clog << "[TCP] Connected to " << host << ":" << port << "\n";
     set_status_("Connected to " + host);
     return {.value = true, .err = error::none};
 }

@@ -3,6 +3,11 @@
 #include <boost/asio/steady_timer.hpp>
 #include <cstring>
 #include <iostream>
+#include <set>
+
+#ifdef _WIN32
+#include <iphlpapi.h>
+#endif
 
 namespace udp_proto {
 
@@ -86,6 +91,47 @@ namespace udp_proto {
 
 namespace udp_discovery {
 
+#ifdef _WIN32
+    std::vector<udp::endpoint> directed_broadcast_endpoints(const unsigned short udp_port)
+    {
+        ULONG buffer_size = 0;
+        if (GetAdaptersAddresses(AF_INET, 0, nullptr, nullptr, &buffer_size) != ERROR_BUFFER_OVERFLOW)
+            return {};
+
+        std::vector<uint8_t> buffer(buffer_size);
+        auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        if (GetAdaptersAddresses(AF_INET, 0, nullptr, adapters, &buffer_size) != NO_ERROR)
+            return {};
+
+        std::set<std::string> addresses;
+        for (auto* adapter = adapters; adapter; adapter = adapter->Next)
+        {
+            if (adapter->OperStatus != IfOperStatusUp)
+                continue;
+
+            for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next)
+            {
+                if (!unicast->Address.lpSockaddr || unicast->Address.lpSockaddr->sa_family != AF_INET)
+                    continue;
+
+                const auto* address = reinterpret_cast<const sockaddr_in*>(unicast->Address.lpSockaddr);
+                const uint32_t host_address = ntohl(address->sin_addr.S_un.S_addr);
+                const uint32_t host_mask = unicast->OnLinkPrefixLength == 32
+                    ? 0xffffffffu
+                    : 0xffffffffu << (32 - unicast->OnLinkPrefixLength);
+                const auto broadcast = net::ip::address_v4(host_address | ~host_mask).to_string();
+                if (broadcast != "127.255.255.255")
+                    addresses.insert(broadcast);
+            }
+        }
+
+        std::vector<udp::endpoint> endpoints;
+        for (const auto& address : addresses)
+            endpoints.emplace_back(net::ip::make_address_v4(address), udp_port);
+        return endpoints;
+    }
+#endif
+
     result<std::pair<std::string, uint16_t>> discover_host(
         const uint32_t session_id,
         const std::chrono::milliseconds timeout,
@@ -112,17 +158,6 @@ namespace udp_discovery {
             }
 
             const auto req_data = udp_proto::serializeDiscoverMessage({.session_id = session_id});
-
-            // Send discover request on LAN broadcast
-            udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
-            const auto send_bcast_res = socket.send_to(net::buffer(req_data), broadcast_ep, 0, ec);
-            (void)send_bcast_res;  // Ignore send result; continue on network errors
-
-            // Also send directly to localhost loopback for same-machine testing
-            udp::endpoint loopback_ep(boost::asio::ip::address_v4::loopback(), udp_port);
-            const auto send_loopback_res = socket.send_to(net::buffer(req_data), loopback_ep, 0, ec);
-            (void)send_loopback_res;  // Ignore send result; continue on network errors
-
             std::array<uint8_t, 256> recv_buf{};
             udp::endpoint sender_ep;
             bool found = false;
@@ -146,6 +181,8 @@ namespace udp_discovery {
                         host_ip = "127.0.0.1";
                     }
                     host_port = offer_res.value.tcp_port;
+                    std::clog << "[UDP] Received offer for session #" << session_id
+                              << " from " << host_ip << ":" << host_port << "\n";
                     (void)timer.cancel();
                     boost::system::error_code socket_close_ec;
                     (void)socket.close(socket_close_ec);
@@ -164,6 +201,25 @@ namespace udp_discovery {
                     (void)socket.close(close_ec);
                 }
             });
+
+            std::clog << "[UDP] Sending discovery request for session #" << session_id
+                      << " on port " << udp_port << "\n";
+
+            // Send discover request on LAN broadcast
+            udp::endpoint broadcast_ep(boost::asio::ip::address_v4::broadcast(), udp_port);
+            const auto send_bcast_res = socket.send_to(net::buffer(req_data), broadcast_ep, 0, ec);
+            (void)send_bcast_res;  // Ignore send result; continue on network errors
+
+#ifdef _WIN32
+            // Mobile hotspots often do not route 255.255.255.255 to the hotspot adapter.
+            for (const auto& directed_ep : directed_broadcast_endpoints(udp_port))
+                (void)socket.send_to(net::buffer(req_data), directed_ep, 0, ec);
+#endif
+
+            // Also send directly to localhost loopback for same-machine testing
+            udp::endpoint loopback_ep(boost::asio::ip::address_v4::loopback(), udp_port);
+            const auto send_loopback_res = socket.send_to(net::buffer(req_data), loopback_ep, 0, ec);
+            (void)send_loopback_res;  // Ignore send result; continue on network errors
 
             io.run();
 
@@ -190,29 +246,42 @@ namespace udp_discovery {
         if (socket_ && socket_->is_open()) return;
 
         stop_flag_.store(false);
+        std::clog << "[UDP] Starting discovery responder on port " << udp_port_ << "\n";
         try {
             socket_ = std::make_unique<udp::socket>(io_);
             const udp::endpoint listen_ep(udp::v4(), udp_port_);
             boost::system::error_code ec;
 
             (void)socket_->open(listen_ep.protocol(), ec);
-            if (ec) return;
+            if (ec) {
+                std::clog << "[UDP] Failed to open responder socket: " << ec.message() << "\n";
+                return;
+            }
 
             (void)socket_->set_option(boost::asio::socket_base::reuse_address(true), ec);
-            if (ec) return;
+            if (ec) {
+                std::clog << "[UDP] Failed to set reuse address: " << ec.message() << "\n";
+                return;
+            }
             (void)socket_->set_option(boost::asio::socket_base::broadcast(true), ec);
-            if (ec) return;
+            if (ec) {
+                std::clog << "[UDP] Failed to set broadcast: " << ec.message() << "\n";
+                return;
+            }
 
             (void)socket_->bind(listen_ep, ec);
             if (ec) {
+                std::clog << "[UDP] Failed to bind responder on port " << udp_port_
+                          << ": " << ec.message() << "\n";
                 boost::system::error_code bind_close_ec;
                 (void)socket_->close(bind_close_ec);
                 return;
             }
 
             worker_ = std::thread(&responder::run_loop, this);
+            std::clog << "[UDP] Discovery responder ready on port " << udp_port_ << "\n";
         } catch (...) {
-            // Ignore startup failures gracefully
+            std::clog << "[UDP] Discovery responder failed with an unknown error\n";
         }
     }
 
@@ -241,15 +310,27 @@ namespace udp_discovery {
             }
 
             const auto req = udp_proto::parseDiscoverMessage(std::span<const uint8_t>(recv_buf.data(), bytes));
-            if (!req) continue;
+            if (!req) {
+                std::clog << "[UDP] Ignoring malformed discovery request: " << req.message << "\n";
+                continue;
+            }
+
+            std::clog << "[UDP] Received discovery request for session #" << req.value.session_id << "\n";
 
             if (lookup_) {
                 if (const auto tcp_p = lookup_(req.value.session_id); tcp_p.has_value()) {
+                    std::clog << "[UDP] Sending offer for session #" << req.value.session_id
+                              << " with TCP port " << *tcp_p << "\n";
                     const auto offer_bytes = udp_proto::serializeOfferMessage({
                         .session_id = req.value.session_id,
                         .tcp_port = *tcp_p
                     });
-                    socket_->send_to(net::buffer(offer_bytes), sender_ep, 0, ec);
+                    (void)socket_->send_to(net::buffer(offer_bytes), sender_ep, 0, ec);
+                    if (ec)
+                        std::clog << "[UDP] Failed to send offer: " << ec.message() << "\n";
+                }
+                else {
+                    std::clog << "[UDP] No open session #" << req.value.session_id << "\n";
                 }
             }
         }

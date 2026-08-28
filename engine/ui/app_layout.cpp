@@ -109,6 +109,7 @@ namespace ui {
                          const bool in_session,
                          const uint32_t session_id,
                          const uint32_t member_id,
+                         const std::vector<session_member_info>& members,
                          const std::string& status,
                          const std::string& current_file,
                          const bool server_running,
@@ -149,7 +150,17 @@ namespace ui {
         DrawTextLayout(TextFormat("Status: %s", s_str), 15, static_cast<int>(top_bar_height) + 65, 14.0f, s_col);
         if (in_session) DrawTextLayout(TextFormat("Session: #%d (M:%d)", session_id, member_id), 15, static_cast<int>(top_bar_height) + 110, 14.0f, BLUE);
         else DrawTextLayout("Not in session", 15, static_cast<int>(top_bar_height) + 110, 14.0f, GRAY);
-        DrawTextWrapped(status, 15, static_cast<int>(top_bar_height) + 145, left_panel_width - 30.0f, 13.0f, DARKBLUE);
+        DrawTextLayout("Members", 15, static_cast<int>(top_bar_height) + 132, 14.0f, DARKGRAY);
+        float member_y = top_bar_height + 152;
+        for (const auto& member : members)
+        {
+            const std::string label = "#" + std::to_string(member.id) + " " + member.name;
+            DrawTextLayout(label.c_str(), 20, static_cast<int>(member_y), 12.0f,
+                           member.id == member_id ? BLUE : GRAY);
+            member_y += 17.0f;
+        }
+        DrawTextWrapped(status, 15, static_cast<int>(member_y) + 5,
+                        left_panel_width - 30.0f, 13.0f, DARKBLUE);
 
         // Right Tools
         DrawTextLayout("Tools", GetScreenWidth() - static_cast<int>(right_panel_width) + 15, static_cast<int>(top_bar_height) + 15, 18.0f, DARKGRAY);

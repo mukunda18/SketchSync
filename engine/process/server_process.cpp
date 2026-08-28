@@ -69,7 +69,7 @@ result<bool> server_process::start(const std::filesystem::path& executable, cons
         nullptr,
         nullptr,
         FALSE,
-        CREATE_NO_WINDOW,
+        CREATE_NEW_CONSOLE,
         nullptr,
         nullptr,
         &startup_info,
