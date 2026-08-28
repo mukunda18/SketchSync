@@ -321,6 +321,38 @@ void server::dispatch(const Header header, const std::span<const uint8_t> payloa
             handle_draw(payload, ctx, conn);
             break;
         }
+    case Opcode::CANVAS_CLEAR:
+        {
+            if (ctx.member_id == 0 || ctx.session_id == 0)
+            {
+                sendError(conn, errcode::UNKNOWN, "not in a session");
+                break;
+            }
+            std::lock_guard lock(sessions_mutex);
+            const auto it = sessions.find(ctx.session_id);
+            if (it == sessions.end())
+            {
+                sendError(conn, errcode::UNKNOWN, "session not found");
+                break;
+            }
+            std::clog << "[DRAW] Broadcasting canvas clear from member #" << ctx.member_id << "\n";
+            const Message clear_message{
+                .header = Header{.opcode = Opcode::CANVAS_CLEAR, .flags = 0, .length = 0},
+                .payload = {}
+            };
+            const auto clear_data = serializeMessage(clear_message);
+            const auto& sess = it->second;
+            std::vector<uint32_t> ids;
+            {
+                std::lock_guard members_lock(sess.members_mutex);
+                for (const auto& [id, session_member] : sess.members)
+                    ids.push_back(id);
+            }
+            for (const auto id : ids)
+                if (auto* member_connection = find_connection(id))
+                    member_connection->send(clear_data);
+            break;
+        }
     default:
         sendError(conn, errcode::UNKNOWN, "unknown opcode");
         break;

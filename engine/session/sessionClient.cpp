@@ -116,6 +116,17 @@ result<bool> sessionClient::send_close_session()
     return {.value = true, .err = error::none};
 }
 
+result<bool> sessionClient::send_canvas_clear()
+{
+    const Message msg{
+        .header = Header{.opcode = Opcode::CANVAS_CLEAR, .flags = 0, .length = 0},
+        .payload = {}
+    };
+    if (const auto r = send_message(msg); !r)
+        return {.value = false, .err = r.err, .message = r.message};
+    return {.value = true, .err = error::none};
+}
+
 result<Message> sessionClient::poll() const
 {
     return receive_msg();

@@ -56,26 +56,12 @@ std::string sketch_app::get_status() const
 void sketch_app::clear_canvas()
 {
     active_stroke.reset();
-    const uint64_t operation_id = session_.next_operation_id();
-    const auto member = static_cast<uint32_t>(operation_id >> 32);
-    const bool host_owns_canvas = session_.host_owns_canvas();
-
-    draw_operation clear_op;
-    clear_op.operation_id = operation_id;
-    clear_op.member_id = member;
-    clear_op.tool = tool_type::clear;
-    clear_op.color = 0xFFFFFFFF;
-    clear_op.thickness = 1;
-
-    if (host_owns_canvas)
-    {
-        clear_op.seq = surface.apply(clear_op);
-        files_.enqueue_if_auto_save(clear_op);
-        rebuild_render_texture();
-        dirty.store(true);
-    }
-
-    session_.broadcast_draw(clear_op, !host_owns_canvas);
+    surface.clear_history();
+    if (files_.auto_save_on() && !files_.is_untitled())
+        files_.save_to_file(files_.current_file());
+    rebuild_render_texture();
+    dirty.store(true);
+    session_.broadcast_clear();
     set_status("Canvas cleared");
 }
 

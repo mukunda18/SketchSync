@@ -24,6 +24,7 @@ struct sessionClient
     result<bool> send_join(uint32_t session_id, const std::string& name);
     result<bool> send_leave();
     result<bool> send_close_session();
+    result<bool> send_canvas_clear();
 
     result<bool> send_draw(draw_operation op);
     result<bool> send_draw_raw(const draw_operation& op);

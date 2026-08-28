@@ -104,6 +104,16 @@ void canvas::create(const uint32_t new_width, const uint32_t new_height, const u
     next_seq.store(1);
 }
 
+void canvas::clear_history()
+{
+    std::lock_guard raster_lock(raster_mutex);
+    std::lock_guard operations_lock(operations_mutex);
+    std::ranges::fill(pixels, background);
+    operations.clear();
+    operation_ids.clear();
+    next_seq.store(1);
+}
+
 uint32_t canvas::apply(draw_operation op)
 {
     if (op.operation_id != 0)

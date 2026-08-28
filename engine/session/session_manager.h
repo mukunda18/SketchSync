@@ -64,6 +64,7 @@ struct session_manager
 
     void send_leave_or_close() const;
     void broadcast_draw(const draw_operation& op, bool track_pending);
+    void broadcast_clear();
     [[nodiscard]] uint32_t member_id_or(uint32_t fallback) const;
     [[nodiscard]] bool host_owns_canvas() const;
     [[nodiscard]] bool in_session() const;
@@ -79,6 +80,7 @@ private:
     void poll_session();
     void handle_notification(const std::vector<uint8_t>& payload);
     void handle_draw(const std::vector<uint8_t>& payload);
+    void handle_clear();
     void handle_canvas_state(const std::vector<uint8_t>& payload) const;
     void handle_ack(const Message& msg);
     void handle_error(const std::vector<uint8_t>& payload);

@@ -20,6 +20,7 @@ namespace Opcode
     constexpr uint8_t CANVAS_STATE = 0x07;
     constexpr uint8_t CANVAS_STATE_REQUEST = 0x08;
     constexpr uint8_t CLOSE_SESSION = 0x09;
+    constexpr uint8_t CANVAS_CLEAR = 0x0A;
 }
 
 struct Header

@@ -237,6 +237,17 @@ void session_manager::broadcast_draw(const draw_operation& op, const bool track_
         std::clog << "[DRAW] Sent operation " << op.operation_id << " from member #" << client->member_id() << "\n";
 }
 
+void session_manager::broadcast_clear()
+{
+    std::lock_guard lock(session_mutex_);
+    if (!client_ || !in_session_)
+        return;
+    if (const auto result = client_->send_canvas_clear(); !result)
+        std::clog << "[DRAW] Failed to send canvas clear: " << result.message << "\n";
+    else
+        std::clog << "[DRAW] Sent canvas clear from member #" << client_->member_id() << "\n";
+}
+
 uint32_t session_manager::member_id_or(const uint32_t fallback) const
 {
     std::lock_guard lock(session_mutex_);
@@ -330,6 +341,7 @@ void session_manager::poll_session()
         {
         case Opcode::NOTIFICATION: handle_notification(msg.payload); break;
         case Opcode::DRAW: handle_draw(msg.payload); break;
+        case Opcode::CANVAS_CLEAR: handle_clear(); break;
         case Opcode::CANVAS_STATE: handle_canvas_state(msg.payload); break;
         case Opcode::ACK:
             std::clog << "[TCP] ACK received while joining state is " << static_cast<int>(joining_state_) << "\n";
@@ -346,6 +358,16 @@ void session_manager::poll_session()
         default: break;
         }
     }
+}
+
+void session_manager::handle_clear()
+{
+    surface_.clear_history();
+    if (files_.auto_save_on() && !files_.is_untitled())
+        files_.save_to_file(files_.current_file());
+    dirty_.store(true);
+    std::clog << "[DRAW] Applied canvas clear; drawing history reset\n";
+    set_status_("Canvas cleared");
 }
 
 void session_manager::handle_notification(const std::vector<uint8_t>& payload)
