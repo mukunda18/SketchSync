@@ -69,7 +69,7 @@ void sketch_app::clear_canvas()
 
     if (host_owns_canvas)
     {
-        surface.apply(clear_op);
+        clear_op.seq = surface.apply(clear_op);
         files_.enqueue_if_auto_save(clear_op);
         rebuild_render_texture();
         dirty.store(true);
